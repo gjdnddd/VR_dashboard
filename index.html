@@ -1,0 +1,1594 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>VR 대시보드</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      min-height: 100vh;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: #1e293b;
+      padding: 14px 16px;
+      border-bottom: 1px solid #334155;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header h1 { font-size: 17px; font-weight: 700; }
+    .header .subtitle { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+
+    /* ── Tab bar ── */
+    .tab-bar {
+      position: fixed;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 100%;
+      max-width: 480px;
+      background: #1e293b;
+      border-top: 1px solid #334155;
+      display: flex;
+      z-index: 200;
+    }
+    .tab-item {
+      flex: 1;
+      padding: 7px 0 11px;
+      text-align: center;
+      cursor: pointer;
+      font-size: 10px;
+      color: #64748b;
+      transition: color .15s;
+      user-select: none;
+    }
+    .tab-item.active { color: #3b82f6; }
+    .tab-icon { font-size: 18px; display: block; margin-bottom: 2px; line-height: 1.4; }
+
+    /* ── Page content ── */
+    .page-content { padding-bottom: 80px; }
+
+    /* ── Cards ── */
+    .card {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 12px 14px;
+      border: 1px solid #334155;
+    }
+    .card-title {
+      font-size: 11px;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+
+    /* ── Metrics grid ── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .metric-item { background: #0f172a; border-radius: 8px; padding: 12px; }
+    .metric-label { font-size: 11px; color: #64748b; margin-bottom: 4px; }
+    .metric-value { font-size: 17px; font-weight: 600; }
+
+    /* ── Status badge ── */
+    .badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+    .badge-band  { background: #1d4ed8; color: #bfdbfe; }
+    .badge-buy   { background: #15803d; color: #bbf7d0; }
+    .badge-sell  { background: #b91c1c; color: #fecaca; }
+    .badge-none  { background: #334155; color: #94a3b8; }
+
+    /* ── Colors ── */
+    .c-green  { color: #22c55e; }
+    .c-red    { color: #ef4444; }
+    .c-blue   { color: #60a5fa; }
+    .c-yellow { color: #fbbf24; }
+    .c-muted  { color: #64748b; }
+
+    .price-big { font-size: 30px; font-weight: 700; line-height: 1; }
+
+    /* ── Pool bar ── */
+    .pool-track { height: 8px; background: #0f172a; border-radius: 4px; margin-top: 8px; overflow: hidden; }
+    .pool-fill  { height: 100%; border-radius: 4px; background: #3b82f6; transition: width .3s; }
+    .pool-fill.warn   { background: #f59e0b; }
+    .pool-fill.danger { background: #ef4444; }
+
+    /* ── Row helper ── */
+    .row { display: flex; align-items: center; justify-content: space-between; }
+
+    /* ── Hold rows ── */
+    .hold-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid #0f172a; }
+    .hold-row:last-child { border-bottom: none; }
+    .hold-label { font-size: 13px; color: #94a3b8; }
+    .hold-val   { font-size: 14px; font-weight: 600; }
+
+    /* ── Manual price input ── */
+    .manual-row { display: flex; gap: 8px; margin-top: 12px; }
+    .manual-row input {
+      flex: 1; background: #0f172a; border: 1px solid #3b82f6;
+      border-radius: 8px; padding: 10px; color: #f1f5f9; font-size: 15px; outline: none;
+    }
+    .manual-row button {
+      background: #3b82f6; border: none; border-radius: 8px;
+      padding: 10px 16px; color: #fff; font-size: 14px; cursor: pointer;
+    }
+
+    /* ── Cycle card ── */
+    .cycle-date-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
+    .cycle-date-row .label { color: #64748b; }
+    .cycle-date-row .val   { font-weight: 600; }
+    .cycle-dday { text-align: center; font-size: 22px; font-weight: 700; margin: 8px 0 6px; }
+    .cycle-dday.ended { color: #f59e0b; }
+    .cycle-dday.soon  { color: #ef4444; }
+    .cycle-dday.ok    { color: #60a5fa; }
+
+    .rollover-box {
+      background: rgba(59,130,246,0.08); border: 1px solid #3b82f6;
+      border-radius: 10px; padding: 14px; margin: 12px 14px;
+    }
+    .rollover-box .rb-title { font-size: 14px; font-weight: 700; color: #60a5fa; margin-bottom: 4px; }
+    .rollover-box .rb-sub   { font-size: 12px; color: #94a3b8; margin-bottom: 12px; }
+    .btn-rollover {
+      width: 100%; background: #3b82f6; color: #fff;
+      border: none; border-radius: 8px; padding: 12px;
+      font-size: 15px; font-weight: 600; cursor: pointer;
+    }
+    .btn-rollover:active { background: #2563eb; }
+    .btn-rollover-subtle {
+      background: none; border: 1px solid #334155; color: #64748b;
+      border-radius: 7px; padding: 7px 14px; font-size: 12px; cursor: pointer;
+    }
+    .btn-rollover-subtle:active { border-color: #3b82f6; color: #60a5fa; }
+
+    /* ── VR Table ── */
+    .tbl-summary { background: #0f172a; border-radius: 8px; padding: 10px 12px; margin: 12px 14px 6px; font-size: 13px; }
+    .tbl-summary .row { margin-bottom: 5px; }
+    .tbl-summary .row:last-child { margin-bottom: 0; }
+
+    .vr-table { width: calc(100% - 28px); margin: 0 14px; border-collapse: collapse; }
+    .vr-table thead tr { border-bottom: 1px solid #334155; }
+    .vr-table th { text-align: right; padding: 8px 8px 8px 0; font-size: 11px; color: #64748b; font-weight: 600; }
+    .vr-table th:first-child { text-align: left; padding-left: 0; }
+    .vr-table td { text-align: right; padding: 10px 8px 10px 0; border-bottom: 1px solid #1e293b; font-size: 14px; }
+    .vr-table td:first-child { text-align: left; font-weight: 700; padding-left: 0; }
+    .vr-table tr:last-child td { border-bottom: none; }
+    .vr-table .row-buy  { background: rgba(34,197,94,0.07); }
+    .vr-table .row-sell { background: rgba(239,68,68,0.07); }
+    .vr-table .row-triggered td:first-child::after { content: ' ◀'; font-size: 10px; opacity: 0.6; }
+
+    .tbl-title { font-size: 14px; font-weight: 700; padding: 16px 14px 4px; display: flex; align-items: center; gap: 8px; }
+    .tbl-title-buy  { color: #22c55e; }
+    .tbl-title-sell { color: #ef4444; }
+
+    .table-empty { text-align: center; padding: 40px 20px; color: #64748b; font-size: 14px; line-height: 1.7; }
+
+    /* ── History tab ── */
+    .paste-wrap { margin: 12px 14px 0; }
+    .paste-label { font-size: 12px; color: #64748b; margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+    .paste-area {
+      width: 100%; background: #0f172a; border: 1px solid #334155;
+      border-radius: 8px; padding: 12px; color: #f1f5f9;
+      font-size: 13px; font-family: 'Courier New', monospace;
+      line-height: 1.7; outline: none; resize: none;
+      transition: border-color .15s;
+    }
+    .paste-area:focus { border-color: #3b82f6; }
+    .parse-btn {
+      width: 100%; margin-top: 8px; background: #1e293b;
+      border: 1px solid #3b82f6; color: #60a5fa;
+      border-radius: 8px; padding: 11px; font-size: 14px;
+      font-weight: 600; cursor: pointer;
+    }
+    .parse-btn:active { background: #1d4ed8; color: #fff; }
+
+    .preview-card {
+      background: #1e293b; border-radius: 10px; padding: 14px;
+      border: 1px solid #334155; margin: 10px 14px 0;
+    }
+    .preview-row {
+      display: flex; justify-content: space-between; font-size: 14px;
+      padding: 5px 0; border-bottom: 1px solid #0f172a;
+    }
+    .preview-row:last-of-type { border-bottom: none; }
+    .parse-error { text-align: center; padding: 14px; color: #f59e0b; font-size: 13px; line-height: 1.6; }
+
+    .trade-item {
+      background: #1e293b; border-radius: 10px; padding: 12px;
+      margin-bottom: 8px; border: 1px solid #334155;
+    }
+    .trade-item:last-child { margin-bottom: 0; }
+
+    .chart-wrap { margin: 0 14px 12px; }
+    .chart-label { font-size: 11px; color: #64748b; margin-bottom: 6px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+    .chart-legend { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+    .legend-item { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #94a3b8; }
+    .legend-dot  { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+    /* ── Form (setup) ── */
+    .form-wrap { padding: 32px 18px 20px; }
+    .form-wrap h2 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+    .form-wrap .sub { font-size: 13px; color: #64748b; margin-bottom: 24px; }
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 6px; font-weight: 500; }
+    .form-group input {
+      width: 100%; background: #0f172a; border: 1px solid #334155;
+      border-radius: 8px; padding: 12px 14px; color: #f1f5f9;
+      font-size: 16px; outline: none; transition: border-color .15s;
+    }
+    .form-group input:focus { border-color: #3b82f6; }
+    .form-group .hint { font-size: 11px; color: #475569; margin-top: 4px; }
+
+    /* ── Buttons ── */
+    .btn { width: 100%; background: #3b82f6; color: #fff; border: none; border-radius: 10px; padding: 14px; font-size: 16px; font-weight: 600; cursor: pointer; }
+    .btn:active { background: #2563eb; }
+    .btn-danger { background: #dc2626; }
+    .btn-danger:active { background: #b91c1c; }
+    .icon-btn { background: none; border: 1px solid #334155; color: #94a3b8; border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+
+    /* ── Settings modal (bottom sheet) ── */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      z-index: 300;
+      display: flex;
+      align-items: flex-end;
+      max-width: 480px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    .modal-sheet {
+      background: #1e293b;
+      border-radius: 16px 16px 0 0;
+      padding: 20px 18px 36px;
+      width: 100%;
+      border-top: 1px solid #334155;
+      animation: slideUp .2s ease;
+    }
+    @keyframes slideUp {
+      from { transform: translateY(40px); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+    .modal-title {
+      font-size: 16px; font-weight: 700;
+      text-align: center; margin-bottom: 20px;
+    }
+    .modal-hint { font-size: 11px; color: #475569; margin-top: 3px; }
+
+    .edit-settings-btn {
+      width: 100%; margin-top: 12px;
+      background: none; border: 1px solid #334155;
+      color: #64748b; border-radius: 8px;
+      padding: 9px; font-size: 13px; cursor: pointer;
+    }
+    .edit-settings-btn:active { border-color: #3b82f6; color: #60a5fa; }
+
+    /* ── Utility ── */
+    .err    { color: #ef4444; font-size: 13px; margin-top: 10px; text-align: center; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<!-- ╔══════════════════════════╗ -->
+<!-- ║      SETUP SCREEN        ║ -->
+<!-- ╚══════════════════════════╝ -->
+<div id="setupScreen" class="hidden">
+  <div class="form-wrap">
+    <h2>VR 대시보드 초기 설정</h2>
+    <p class="sub">최초 1회 입력 후 자동 계산됩니다</p>
+
+    <div class="form-group">
+      <label>V1 — 직전 사이클 V값 또는 초기 매수금 (USD) <span style="color:#ef4444">*</span></label>
+      <input type="number" id="inp_v1" placeholder="예: 5000" inputmode="decimal" step="0.01">
+      <div class="hint">최초 운용 시 TQQQ 초기 매수 총액 입력</div>
+    </div>
+    <div class="form-group">
+      <label>보유 주식수 (주) <span style="color:#ef4444">*</span></label>
+      <input type="number" id="inp_shares" placeholder="예: 120" inputmode="decimal" step="0.01">
+    </div>
+    <div class="form-group">
+      <label>Pool — 보유 현금 (USD) <span style="color:#ef4444">*</span></label>
+      <input type="number" id="inp_pool" placeholder="예: 3000" inputmode="decimal" step="0.01">
+    </div>
+    <div class="form-group">
+      <label>G값 — 기울기</label>
+      <input type="number" id="inp_g" placeholder="기본값: 10" value="10" inputmode="decimal" step="0.1">
+      <div class="hint">클수록 보수적. 기본값 10 권장</div>
+    </div>
+    <div class="form-group">
+      <label>사이클 시작 날짜 (첫 번째 월요일) <span style="color:#ef4444">*</span></label>
+      <input type="date" id="inp_startWeek">
+      <div class="hint">입력한 날 = 0주차 시작. 2주 후 월요일 = 2주차</div>
+    </div>
+    <div class="form-group">
+      <label>테이블 단위 수량 (주)</label>
+      <input type="number" id="inp_unitQty" placeholder="기본값: 1" value="1" inputmode="numeric" step="1" min="1">
+      <div class="hint">10개 초과 시 자동 조정됩니다</div>
+    </div>
+
+    <button class="btn" onclick="saveSetup()">저장하고 시작하기</button>
+    <p id="setupError" class="err"></p>
+  </div>
+</div>
+
+<!-- ╔══════════════════════════╗ -->
+<!-- ║    DASHBOARD SCREEN      ║ -->
+<!-- ╚══════════════════════════╝ -->
+<div id="dashboardScreen" class="hidden">
+
+  <div class="header">
+    <div class="row">
+      <div>
+        <h1>VR 대시보드</h1>
+        <div class="subtitle" id="cycleInfo">계산 중…</div>
+      </div>
+      <button class="icon-btn" onclick="refreshPrice()">↻ 새로고침</button>
+    </div>
+  </div>
+
+  <!-- ══ Tab: 메인 ══ -->
+  <div id="tabMain" class="page-content">
+
+    <div class="card">
+      <div class="row" style="margin-bottom:10px;">
+        <div class="card-title" style="margin-bottom:0;">TQQQ 현재가</div>
+        <span id="lastUpdated" class="c-muted" style="font-size:11px;"></span>
+      </div>
+      <div class="row">
+        <div class="price-big" id="currentPrice">--</div>
+        <span id="evalStatus" class="badge badge-none">계산 중</span>
+      </div>
+      <div id="manualPriceWrap" class="hidden">
+        <div style="font-size:12px; color:#f59e0b; margin-top:10px; margin-bottom:4px;">자동 조회 실패 — 현재가를 직접 입력하세요</div>
+        <div class="manual-row">
+          <input type="number" id="inp_manualPrice" placeholder="예: 44.50" inputmode="decimal" step="0.01">
+          <button onclick="applyManualPrice()">적용</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">핵심 지표</div>
+      <div class="grid-2">
+        <div class="metric-item">
+          <div class="metric-label">평가금</div>
+          <div class="metric-value" id="evalAmount">--</div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-label">V2</div>
+          <div class="metric-value c-blue" id="v2Value">--</div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-label">Vlow (×0.85)</div>
+          <div class="metric-value c-green" id="vlowValue">--</div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-label">Vhigh (×1.15)</div>
+          <div class="metric-value c-red" id="vhighValue">--</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 사이클 관리 -->
+    <div class="card">
+      <div class="card-title">사이클 관리</div>
+      <div class="cycle-date-row"><span class="label">현재 사이클</span><span class="val" id="cycleNumDisplay">--</span></div>
+      <div class="cycle-date-row"><span class="label">시작</span><span class="val" id="cycleStartDisplay">--</span></div>
+      <div class="cycle-date-row"><span class="label">종료</span><span class="val" id="cycleEndDisplay">--</span></div>
+      <div class="cycle-dday ok" id="cycleDday">--</div>
+    </div>
+
+    <!-- 사이클 종료 배너 (isEnded + 미완료일 때만 표시) -->
+    <div id="cycleEndedBanner" class="rollover-box hidden">
+      <div class="rb-title">사이클이 종료되었습니다</div>
+      <div class="rb-sub" id="rolloverSubText">V2를 새 사이클의 V1으로 설정하세요</div>
+      <button class="btn-rollover" onclick="rolloverCycle()">새 사이클 시작 (V2 → V1)</button>
+    </div>
+
+    <!-- 롤오버 완료 표시 (같은 사이클 재실행 방지) -->
+    <div id="rolloverDoneBox" class="hidden"
+         style="margin:12px 14px; background:#0f172a; border:1px solid #334155; border-radius:10px; padding:14px; text-align:center;">
+      <div style="font-size:14px; font-weight:600; color:#22c55e; margin-bottom:4px;">롤오버 완료</div>
+      <div id="rolloverDoneText" style="font-size:12px; color:#64748b;"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Pool 현황</div>
+      <div class="row" style="margin-bottom:4px;">
+        <span style="font-size:13px; color:#94a3b8;">잔여 Pool</span>
+        <span style="font-size:17px; font-weight:600;" id="poolRemain">--</span>
+      </div>
+      <div class="row" style="margin-bottom:8px;">
+        <span style="font-size:12px; color:#64748b;">75% 매수 한도</span>
+        <span class="c-yellow" style="font-size:14px; font-weight:600;" id="poolLimit">--</span>
+      </div>
+      <div class="pool-track">
+        <div class="pool-fill" id="poolFill" style="width:0%;"></div>
+      </div>
+      <div class="row" style="margin-top:4px;">
+        <span style="font-size:11px;" class="c-muted" id="poolUsedLabel">이번 사이클 매수: $0</span>
+        <span style="font-size:11px;" class="c-muted" id="poolPctLabel">0%</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">보유 현황 &amp; 설정값</div>
+      <div class="hold-row"><span class="hold-label">보유 주식</span><span class="hold-val" id="sharesDisplay">--</span></div>
+      <div class="hold-row"><span class="hold-label">V1</span><span class="hold-val" id="v1Display">--</span></div>
+      <div class="hold-row"><span class="hold-label">G값</span><span class="hold-val" id="gDisplay">--</span></div>
+      <div class="hold-row"><span class="hold-label">사이클 시작 주차</span><span class="hold-val" id="startWeekDisplay">--</span></div>
+      <div class="hold-row"><span class="hold-label">테이블 단위 수량</span><span class="hold-val" id="unitQtyDisplay">--</span></div>
+      <button class="edit-settings-btn" onclick="openSettings()">&#9998; 설정 수정 (G값 · Pool · 단위수량)</button>
+    </div>
+
+    <div style="margin: 4px 14px 24px;">
+      <button class="btn btn-danger" style="font-size:14px; padding:12px;" onclick="confirmReset()">초기화 (재설정)</button>
+    </div>
+
+  </div><!-- /tabMain -->
+
+  <!-- ══ Tab: 매수 ══ -->
+  <div id="tabBuy" class="page-content hidden">
+    <div id="buyContent"><div class="table-empty">현재가 로딩 후 표시됩니다</div></div>
+  </div>
+
+  <!-- ══ Tab: 매도 ══ -->
+  <div id="tabSell" class="page-content hidden">
+    <div id="sellContent"><div class="table-empty">현재가 로딩 후 표시됩니다</div></div>
+  </div>
+
+  <!-- ══ Tab: 히스토리 ══ -->
+  <div id="tabHistory" class="page-content hidden">
+
+    <!-- 카카오톡 붙여넣기 -->
+    <div class="paste-wrap">
+      <div class="paste-label">체결 문자 입력</div>
+      <textarea id="inp_tradeText" class="paste-area" rows="7"
+        placeholder="카카오톡 체결 알림 문자를 전체 복사 후 붙여넣기
+예)
+[메리츠증권] 해외주식 주문체결 안내
+종목명 : PROSHARES QQQ 3X(TQQQ)
+매매구분 : 매도
+체결단가 : USD 48.9600
+체결수량 : 43주
+체결금액 : USD 2,105.28
+체결일자 : 04/09"></textarea>
+      <button class="parse-btn" onclick="previewTrade()">파싱 확인</button>
+    </div>
+
+    <!-- 파싱 미리보기 -->
+    <div id="tradePreview"></div>
+
+    <!-- 히스토리 리스트 + 차트 -->
+    <div id="historyContent"></div>
+
+  </div><!-- /tabHistory -->
+
+  <!-- ══ Tab Bar ══ -->
+  <div class="tab-bar">
+    <div class="tab-item active" id="tab-main" onclick="switchTab('main')">
+      <span class="tab-icon">&#9783;</span>메인
+    </div>
+    <div class="tab-item" id="tab-buy" onclick="switchTab('buy')">
+      <span class="tab-icon">&#9660;</span>매수
+    </div>
+    <div class="tab-item" id="tab-sell" onclick="switchTab('sell')">
+      <span class="tab-icon">&#9650;</span>매도
+    </div>
+    <div class="tab-item" id="tab-history" onclick="switchTab('history')">
+      <span class="tab-icon">&#128203;</span>히스토리
+    </div>
+  </div>
+
+<!-- ╔══════════════════════════╗ -->
+<!-- ║    SETTINGS MODAL        ║ -->
+<!-- ╚══════════════════════════╝ -->
+<div id="settingsModal" class="modal-overlay hidden" onclick="modalOverlayClick(event)">
+  <div class="modal-sheet">
+    <div class="modal-title">설정 수정</div>
+
+    <div class="form-group">
+      <label>G값 — 기울기</label>
+      <input type="number" id="edit_g" inputmode="decimal" step="0.1" min="1">
+      <div class="modal-hint">클수록 보수적. 기본값 10</div>
+    </div>
+
+    <div class="form-group">
+      <label>Pool — 현재 보유 현금 (USD)</label>
+      <input type="number" id="edit_pool" inputmode="decimal" step="0.01" min="0">
+      <div class="modal-hint">변경 시 이번 사이클 Pool 기준도 함께 갱신됩니다</div>
+    </div>
+
+    <div class="form-group">
+      <label>테이블 단위 수량 (주)</label>
+      <input type="number" id="edit_unitQty" inputmode="numeric" step="1" min="1">
+      <div class="modal-hint">10개 초과 시 자동 조정됩니다</div>
+    </div>
+
+    <button class="btn" onclick="saveSettings()">저장</button>
+    <button class="btn btn-danger" style="margin-top:8px;" onclick="closeSettings()">취소</button>
+
+    <!-- ── GitHub Gist 동기화 ── -->
+    <div style="margin-top:24px; padding-top:18px; border-top:1px solid #334155;">
+      <div style="font-size:12px; color:#64748b; text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:12px;">클라우드 동기화 (GitHub Gist)</div>
+
+      <div class="form-group">
+        <label>GitHub Personal Access Token</label>
+        <input type="password" id="edit_pat" placeholder="ghp_xxxxxxxxxxxx" autocomplete="off"
+               style="font-family:monospace; font-size:13px;">
+        <div class="modal-hint">gist 권한만 있으면 됩니다 · 이 기기에만 저장됩니다</div>
+      </div>
+
+      <div class="form-group" style="margin-bottom:8px;">
+        <label>Gist ID <span style="font-weight:400; color:#475569;">(첫 저장 시 자동 생성)</span></label>
+        <input type="text" id="edit_gistId" placeholder="자동 입력됩니다"
+               style="font-family:monospace; font-size:13px;">
+        <div class="modal-hint">다른 기기에서 불러올 때 같은 ID를 입력하세요</div>
+      </div>
+
+      <div id="syncStatus" style="font-size:12px; text-align:center; min-height:18px; margin-bottom:8px;"></div>
+
+      <div style="display:flex; gap:8px;">
+        <button onclick="gistSave()" style="flex:1; background:#1d4ed8; color:#fff; border:none; border-radius:8px; padding:11px; font-size:13px; font-weight:600; cursor:pointer;">☁ 저장 (업로드)</button>
+        <button onclick="gistLoad()" style="flex:1; background:#0f172a; color:#94a3b8; border:1px solid #334155; border-radius:8px; padding:11px; font-size:13px; font-weight:600; cursor:pointer;">⬇ 불러오기</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /dashboardScreen -->
+
+<script>
+/* ============================================================
+   Storage
+   ============================================================ */
+const KEYS = {
+  v1:               'vr_v1',
+  shares:           'vr_shares',
+  pool:             'vr_pool',
+  g:                'vr_g',
+  startWeek:        'vr_start_week',
+  unitQty:          'vr_unit_qty',
+  trades:           'vr_trades',
+  cycleStartPool:   'vr_cycle_start_pool',
+  lastRolloverWeek: 'vr_last_rollover_week', // 중복 롤오버 방지
+  setupAt:          'vr_setup_at',           // 초기 입력 시각 (ms) — 이전 사이클 배너 차단용
+  githubPat:        'vr_github_pat',         // GitHub Personal Access Token (로컬 전용)
+  gistId:           'vr_gist_id',            // 생성된 Gist ID (로컬 전용)
+};
+
+// 클라우드 동기화 대상 키 (PAT·GistID는 제외 — 기기마다 따로 관리)
+const SYNC_KEYS = ['vr_v1','vr_shares','vr_pool','vr_g','vr_start_week',
+                   'vr_unit_qty','vr_trades','vr_cycle_start_pool','vr_last_rollover_week'];
+
+const save    = (k, v) => localStorage.setItem(k, String(v));
+const load    = (k)    => localStorage.getItem(k);
+const loadNum = (k)    => parseFloat(localStorage.getItem(k)) || 0;
+
+function loadTrades() {
+  try { return JSON.parse(localStorage.getItem(KEYS.trades) || '[]'); }
+  catch { return []; }
+}
+function saveTrades(arr) {
+  localStorage.setItem(KEYS.trades, JSON.stringify(arr));
+  autoGistPush(); // 거래내역 변경 시 자동 동기화
+}
+
+function hasSetup() {
+  return load(KEYS.v1) && load(KEYS.shares) && load(KEYS.pool) && load(KEYS.startWeek);
+}
+
+/* ============================================================
+   Setup
+   ============================================================ */
+function saveSetup() {
+  const v1        = parseFloat(document.getElementById('inp_v1').value);
+  const shares    = parseFloat(document.getElementById('inp_shares').value);
+  const pool      = parseFloat(document.getElementById('inp_pool').value);
+  const g         = parseFloat(document.getElementById('inp_g').value) || 10;
+  const startWeek = document.getElementById('inp_startWeek').value.trim();
+  const unitQty   = parseInt(document.getElementById('inp_unitQty').value) || 1;
+  const errEl     = document.getElementById('setupError');
+
+  if (!v1    || v1 <= 0)       { errEl.textContent = 'V1 값을 입력하세요.';      return; }
+  if (!shares || shares <= 0)  { errEl.textContent = '보유 주식수를 입력하세요.'; return; }
+  if (isNaN(pool) || pool < 0) { errEl.textContent = 'Pool 값을 입력하세요.';    return; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startWeek) || isNaN(Date.parse(startWeek))) {
+    errEl.textContent = '날짜 형식이 올바르지 않습니다 (예: 2025-01-13)';
+    return;
+  }
+  errEl.textContent = '';
+
+  save(KEYS.v1,             v1);
+  save(KEYS.shares,         shares);
+  save(KEYS.pool,           pool);
+  save(KEYS.g,              g);
+  save(KEYS.startWeek,      startWeek);
+  save(KEYS.unitQty,        unitQty);
+  save(KEYS.cycleStartPool, pool);  // baseline for pool bar
+  save(KEYS.setupAt,        Date.now()); // 초기 입력 시각 기록
+
+  showDashboard();
+}
+
+/* ============================================================
+   ISO week helpers
+   ============================================================ */
+function getCycleInfo(startDateStr) {
+  // startDateStr: "YYYY-MM-DD" (첫 번째 월요일, 한국 날짜)
+  if (!startDateStr || !/^\d{4}-\d{2}-\d{2}$/.test(startDateStr)) return null;
+  const [y, mo, d] = startDateStr.split('-').map(Number);
+
+  // 사이클 시작 월요일 — 입력 날짜를 UTC 자정으로 고정
+  // (한국 사용자가 "2025-01-06 월요일"을 입력 → UTC 기준 Jan 6 00:00으로 저장)
+  const startMon = new Date(Date.UTC(y, mo - 1, d));
+
+  // ── 사이클 마감 시각 계산 ──────────────────────────────────────
+  // 한국시간 토요일 06:10 KST = 금요일 21:10 UTC (한국은 DST 없음, 고정 UTC+9)
+  // 시작 월요일 기준: +11일(금요일) + 21시간 + 10분 = 종료 UTC timestamp
+  const END_OFFSET_MS = (11 * 86400 + 21 * 3600 + 10 * 60) * 1000;
+  // ─────────────────────────────────────────────────────────────
+
+  const nowMs  = Date.now(); // 순수 UTC ms — 로컬 타임존 영향 없음
+  const diff   = nowMs - startMon.getTime();
+
+  // 아직 시작 전
+  if (diff < 0) {
+    const end0 = new Date(startMon.getTime() + END_OFFSET_MS);
+    const cSat0 = new Date(startMon); cSat0.setUTCDate(startMon.getUTCDate() + 12);
+    return { cycleWeek: 0, daysRemaining: null, isEnded: false, startDate: startMon, endDate: cSat0 };
+  }
+
+  // cycleIndex: 0, 1, 2... → cycleWeek: 0주차, 2주차, 4주차...
+  const cycleIndex = Math.floor(Math.floor(diff / 604800000) / 2);
+  const cycleWeek  = cycleIndex * 2;
+
+  // 이번 사이클 시작 월요일 (UTC 자정)
+  const cMon = new Date(startMon);
+  cMon.setUTCDate(startMon.getUTCDate() + cycleIndex * 14);
+
+  // 이번 사이클 마감 timestamp (UTC ms)
+  const cEndMs  = cMon.getTime() + END_OFFSET_MS;
+  const isEnded = nowMs >= cEndMs;
+
+  // D-day: 마감까지 남은 일수 (소수점 올림)
+  const msLeft   = cEndMs - nowMs;
+  const daysLeft = Math.ceil(msLeft / 86400000);
+
+  // 화면 표시용 종료일: 토요일 (cMon + 12일, KST 날짜와 동일)
+  const cSat = new Date(cMon);
+  cSat.setUTCDate(cMon.getUTCDate() + 12);
+
+  return {
+    cycleWeek,
+    daysRemaining: Math.max(0, daysLeft),
+    isEnded,
+    endMs:    cEndMs,  // 사이클 마감 timestamp (배너 차단 비교용)
+    startDate: cMon,
+    endDate:   cSat,   // 토요일 표시
+  };
+}
+
+function fmtDate(d) {
+  const days = ['일','월','화','수','목','금','토'];
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${mm}/${dd} (${days[d.getUTCDay()]})`;
+}
+
+/* ============================================================
+   Price fetch
+   ============================================================ */
+let currentPrice = null;
+
+async function fetchPrice() {
+  setUI('loading');
+
+  const YF_PATH = 'https://query1.finance.yahoo.com/v8/finance/chart/TQQQ?interval=1d&range=1d';
+  const YF_PATH2 = 'https://query2.finance.yahoo.com/v8/finance/chart/TQQQ?interval=1d&range=1d';
+
+  // 시도 순서: 직접 → CORS 프록시 2종
+  const attempts = [
+    { url: YF_PATH,  parse: parseYahoo },
+    { url: YF_PATH2, parse: parseYahoo },
+    { url: `https://corsproxy.io/?url=${encodeURIComponent(YF_PATH)}`,  parse: parseYahoo },
+    { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(YF_PATH)}`, parse: parseYahoo },
+  ];
+
+  for (const { url, parse } of attempts) {
+    try {
+      const res = await fetch(url, { cache: 'no-cache' });
+      if (!res.ok) continue;
+      const json = await res.json();
+      const p    = parse(json);
+      if (p && p > 0) { applyPrice(p, 'auto'); return; }
+    } catch (_) {}
+  }
+
+  setUI('manual'); // 모든 시도 실패 → 수동 입력
+}
+
+function parseYahoo(json) {
+  return json?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
+}
+
+function applyPrice(price, source) {
+  currentPrice = price;
+  document.getElementById('currentPrice').textContent =
+    `$${price.toFixed(2)}`;
+  document.getElementById('lastUpdated').textContent  =
+    (source === 'auto' ? '자동 ' : '수동 ') +
+    new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+  document.getElementById('manualPriceWrap').classList.add('hidden');
+  calculateAndRender();
+}
+
+function applyManualPrice() {
+  const val = parseFloat(document.getElementById('inp_manualPrice').value);
+  if (!val || val <= 0) { alert('올바른 현재가를 입력하세요.'); return; }
+  applyPrice(val, 'manual');
+}
+
+function refreshPrice() { fetchPrice(); }
+
+function setUI(state) {
+  if (state === 'loading') {
+    document.getElementById('currentPrice').textContent = '로딩 중…';
+    document.getElementById('manualPriceWrap').classList.add('hidden');
+  } else {
+    document.getElementById('currentPrice').textContent = '--';
+    document.getElementById('manualPriceWrap').classList.remove('hidden');
+  }
+}
+
+/* ============================================================
+   Formatting
+   ============================================================ */
+function fmt(n) {
+  if (n === null || isNaN(n)) return '--';
+  if (Math.abs(n) >= 1000)
+    return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  return '$' + n.toFixed(2);
+}
+function fmtAmt(n) {
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/* ============================================================
+   Buy / Sell table logic
+   ============================================================ */
+function unitSteps(base) {
+  const seq = [1, 2, 5, 10];
+  return [base, ...seq.filter(s => s > base)];
+}
+
+function runBuySimulation(price, shares, vlow, pool, unit) {
+  const floor = price * 0.80, limit = pool * 0.75;
+  let sim = shares, used = 0, cum = 0;
+  const rows = [];
+  while (true) {
+    const trig = vlow / sim;
+    if (trig < floor) break;
+    const cost = trig * unit;
+    if (used + cost > limit) break;
+    used += cost; sim += unit; cum += unit;
+    rows.push({ price: trig, qty: unit, cumQty: cum, poolUsed: used });
+  }
+  return rows;
+}
+
+function calcBuyTable(price, shares, vlow, pool, base) {
+  for (const unit of unitSteps(base)) {
+    const rows = runBuySimulation(price, shares, vlow, pool, unit);
+    if (rows.length <= 10) return { rows, unit };
+  }
+  const last = unitSteps(base).at(-1);
+  return { rows: runBuySimulation(price, shares, vlow, pool, last).slice(0, 10), unit: last };
+}
+
+function runSellSimulation(price, shares, vhigh, unit) {
+  const ceil = price * 1.20;
+  let sim = shares, gain = 0, cum = 0;
+  const rows = [];
+  while (true) {
+    if (sim < unit) break;
+    const trig = vhigh / sim;
+    if (trig > ceil) break;
+    gain += trig * unit; sim -= unit; cum += unit;
+    rows.push({ price: trig, qty: unit, cumQty: cum, poolGain: gain });
+  }
+  return rows;
+}
+
+function calcSellTable(price, shares, vhigh, base) {
+  for (const unit of unitSteps(base)) {
+    const rows = runSellSimulation(price, shares, vhigh, unit);
+    if (rows.length <= 10) return { rows, unit };
+  }
+  const last = unitSteps(base).at(-1);
+  return { rows: runSellSimulation(price, shares, vhigh, last).slice(0, 10), unit: last };
+}
+
+/* ============================================================
+   Table renderers
+   ============================================================ */
+function renderBuyTable(price, shares, vlow, pool, base) {
+  const el = document.getElementById('buyContent');
+  if (!price) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
+
+  const { rows, unit } = calcBuyTable(price, shares, vlow, pool, base);
+  const floor = price * 0.80, lim = pool * 0.75;
+  const adj   = unit !== base;
+
+  let html = `
+    <div class="tbl-title tbl-title-buy">▼ 매수 테이블
+      <span style="font-size:12px; font-weight:400;" class="${adj ? 'c-yellow' : 'c-muted'}">
+        단위${adj ? ' 자동조정' : ''}: ${unit}주
+      </span>
+    </div>
+    <div class="tbl-summary">
+      <div class="row"><span class="c-muted">Vlow</span><span class="c-green">${fmt(vlow)}</span></div>
+      <div class="row"><span class="c-muted">-20% 하한</span><span>$${floor.toFixed(2)}</span></div>
+      <div class="row"><span class="c-muted">Pool 75% 한도</span><span class="c-yellow">${fmt(lim)}</span></div>
+      <div class="row" style="margin-top:2px;"><span class="c-muted">항목 수</span><span>${rows.length}개</span></div>
+    </div>`;
+
+  if (!rows.length) {
+    html += '<div class="table-empty">-20% 구간 내 매수 조건 없음<br><span class="c-muted">또는 Pool 75% 소진</span></div>';
+  } else {
+    html += `<table class="vr-table"><thead><tr><th>매수가</th><th>수량</th><th>누적</th><th>Pool 소진</th></tr></thead><tbody>`;
+    for (const r of rows) {
+      const hit = r.price >= price;
+      html += `<tr class="row-buy${hit ? ' row-triggered' : ''}">
+        <td class="c-green">$${r.price.toFixed(2)}</td><td>${r.qty}주</td><td>${r.cumQty}주</td><td class="c-yellow">${fmt(r.poolUsed)}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  }
+  el.innerHTML = html;
+}
+
+function renderSellTable(price, shares, vhigh, base) {
+  const el = document.getElementById('sellContent');
+  if (!price) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
+
+  const { rows, unit } = calcSellTable(price, shares, vhigh, base);
+  const ceil = price * 1.20;
+  const adj  = unit !== base;
+
+  let html = `
+    <div class="tbl-title tbl-title-sell">▲ 매도 테이블
+      <span style="font-size:12px; font-weight:400;" class="${adj ? 'c-yellow' : 'c-muted'}">
+        단위${adj ? ' 자동조정' : ''}: ${unit}주
+      </span>
+    </div>
+    <div class="tbl-summary">
+      <div class="row"><span class="c-muted">Vhigh</span><span class="c-red">${fmt(vhigh)}</span></div>
+      <div class="row"><span class="c-muted">+20% 상한</span><span>$${ceil.toFixed(2)}</span></div>
+      <div class="row" style="margin-top:2px;"><span class="c-muted">항목 수</span><span>${rows.length}개</span></div>
+    </div>`;
+
+  if (!rows.length) {
+    html += '<div class="table-empty">+20% 구간 내 매도 조건 없음</div>';
+  } else {
+    html += `<table class="vr-table"><thead><tr><th>매도가</th><th>수량</th><th>누적</th><th>예상 회수</th></tr></thead><tbody>`;
+    for (const r of rows) {
+      const hit = r.price <= price;
+      html += `<tr class="row-sell${hit ? ' row-triggered' : ''}">
+        <td class="c-red">$${r.price.toFixed(2)}</td><td>${r.qty}주</td><td>${r.cumQty}주</td><td class="c-blue">${fmt(r.poolGain)}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  }
+  el.innerHTML = html;
+}
+
+/* ============================================================
+   Phase 4 — 카카오톡 파싱 & 히스토리
+   ============================================================ */
+function parseTrade(text) {
+  const get = (label) => {
+    const m = text.match(new RegExp(label + '\\s*:\\s*([^\\n]+)'));
+    return m ? m[1].trim() : null;
+  };
+  const typeStr   = get('매매구분');
+  const priceStr  = get('체결단가');
+  const qtyStr    = get('체결수량');
+  const amountStr = get('체결금액');
+  const dateStr   = get('체결일자');
+
+  if (!typeStr || !priceStr || !qtyStr || !amountStr) return null;
+
+  const type   = typeStr.includes('매도') ? '매도' : '매수';
+  const price  = parseFloat(priceStr.replace(/USD\s*/i, '').replace(/,/g, ''));
+  const qty    = parseInt(qtyStr.replace(/\D/g, ''));
+  const amount = parseFloat(amountStr.replace(/USD\s*/i, '').replace(/,/g, ''));
+  const date   = dateStr ? dateStr.trim() : '--';
+
+  if (isNaN(price) || isNaN(qty) || isNaN(amount)) return null;
+  return { type, price, qty, amount, date };
+}
+
+let pendingTrade = null;
+
+function previewTrade() {
+  const text   = document.getElementById('inp_tradeText').value.trim();
+  const prevEl = document.getElementById('tradePreview');
+  if (!text) { alert('카카오톡 체결 문자를 붙여넣어주세요.'); return; }
+
+  const t = parseTrade(text);
+  if (!t) {
+    prevEl.innerHTML = '<div class="preview-card"><div class="parse-error">형식을 인식하지 못했습니다.<br>카카오톡 체결 알림 문자를 전체 복사해주세요.</div></div>';
+    return;
+  }
+  pendingTrade = t;
+
+  const col = t.type === '매수' ? '#22c55e' : '#ef4444';
+  prevEl.innerHTML = `
+    <div class="preview-card">
+      <div class="row" style="margin-bottom:10px;">
+        <span style="font-weight:700; font-size:16px; color:${col};">${t.type}</span>
+        <span class="c-muted" style="font-size:13px;">${t.date}</span>
+      </div>
+      <div class="preview-row"><span class="c-muted">체결단가</span><span>$${t.price.toFixed(4)}</span></div>
+      <div class="preview-row"><span class="c-muted">체결수량</span><span>${t.qty}주</span></div>
+      <div class="preview-row"><span class="c-muted">체결금액</span><span>${fmtAmt(t.amount)}</span></div>
+      <div style="margin-top:12px; display:flex; gap:8px;">
+        <button onclick="confirmTrade()" class="btn" style="flex:1; padding:11px; font-size:14px;">확인 저장</button>
+        <button onclick="cancelTrade()" class="btn btn-danger" style="flex:0 0 80px; padding:11px; font-size:14px;">취소</button>
+      </div>
+    </div>`;
+}
+
+function confirmTrade() {
+  if (!pendingTrade) return;
+  const t = pendingTrade;
+
+  const shares    = loadNum(KEYS.shares);
+  const pool      = loadNum(KEYS.pool);
+  const v1        = loadNum(KEYS.v1);
+  const g         = loadNum(KEYS.g) || 10;
+  const startWeek = load(KEYS.startWeek) || '';
+  const cycleInfo = getCycleInfo(startWeek);
+  const cycleWeek = cycleInfo ? cycleInfo.cycleWeek : 0;
+
+  const evalSnap  = t.price * (t.type === '매수' ? shares + t.qty : shares - t.qty);
+  const e     = currentPrice !== null ? currentPrice * shares : v1;
+  const v2    = v1 + pool / g + (e - v1) / (2 * Math.sqrt(g));
+  const vlow  = v2 * 0.85;
+  const vhigh = v2 * 1.15;
+
+  const newShares = t.type === '매수' ? shares + t.qty : shares - t.qty;
+  const newPool   = t.type === '매수' ? pool - t.amount : pool + t.amount;
+
+  const record = {
+    id: Date.now(), timestamp: Date.now(),
+    date: t.date, type: t.type,
+    price: t.price, qty: t.qty, amount: t.amount,
+    sharesAfter: newShares, poolAfter: newPool,
+    cycleWeek,
+    v2snap: v2, vlowSnap: vlow, vhighSnap: vhigh, evalSnap,
+  };
+
+  const trades = loadTrades();
+  trades.push(record);
+  saveTrades(trades);
+
+  save(KEYS.shares, newShares);
+  save(KEYS.pool,   newPool);
+
+  pendingTrade = null;
+  document.getElementById('inp_tradeText').value = '';
+  document.getElementById('tradePreview').innerHTML = '';
+
+  calculateAndRender();
+  renderHistory();
+}
+
+function cancelTrade() {
+  pendingTrade = null;
+  document.getElementById('tradePreview').innerHTML = '';
+}
+
+function deleteTrade(id) {
+  const trades = loadTrades();
+  const t      = trades.find(x => x.id === id);
+  if (!t) return;
+
+  const isBuy = t.type === '매수';
+  const msg   = `[${t.date}] ${t.type} ${t.qty}주 (${fmtAmt(t.amount)})\n\n이 내역을 삭제하면:\n`
+    + (isBuy
+        ? `보유주식 ${t.qty}주 감소, Pool +${fmtAmt(t.amount)}`
+        : `보유주식 ${t.qty}주 증가, Pool -${fmtAmt(t.amount)}`)
+    + `\n\n삭제하시겠습니까?`;
+
+  if (!confirm(msg)) return;
+
+  // 현재 shares/pool에서 해당 거래 효과 역산
+  const curShares = loadNum(KEYS.shares);
+  const curPool   = loadNum(KEYS.pool);
+  const newShares = isBuy ? curShares - t.qty : curShares + t.qty;
+  const newPool   = isBuy ? curPool   + t.amount : curPool - t.amount;
+
+  save(KEYS.shares, newShares);
+  save(KEYS.pool,   newPool);
+  saveTrades(trades.filter(x => x.id !== id));
+
+  calculateAndRender();
+  renderHistory();
+}
+
+function renderHistory() {
+  const trades    = loadTrades();
+  const startWeek = load(KEYS.startWeek) || '';
+  const cycleInfo = getCycleInfo(startWeek);
+  const curCycle  = cycleInfo ? cycleInfo.cycleWeek : 0;
+  const cont      = document.getElementById('historyContent');
+
+  const thisCycle  = trades.filter(t => (t.cycleWeek ?? t.cycleNum) === curCycle);
+  const buyAmt     = thisCycle.filter(t => t.type === '매수').reduce((s, t) => s + t.amount, 0);
+  const sellAmt    = thisCycle.filter(t => t.type === '매도').reduce((s, t) => s + t.amount, 0);
+  const net        = buyAmt - sellAmt;
+
+  let html = `
+    <div class="card" style="margin-top:12px;">
+      <div class="card-title">이번 사이클 요약 (${curCycle}주차)</div>
+      <div class="hold-row"><span class="hold-label">총 매수</span><span class="hold-val c-green">${fmt(buyAmt)}</span></div>
+      <div class="hold-row"><span class="hold-label">총 매도</span><span class="hold-val c-red">${fmt(sellAmt)}</span></div>
+      <div class="hold-row"><span class="hold-label">순 매수</span><span class="hold-val ${net >= 0 ? 'c-green' : 'c-red'}">${fmt(net)}</span></div>
+    </div>`;
+
+  // Chart
+  if (trades.length > 0) {
+    html += `
+      <div class="chart-wrap" style="margin-top:0;">
+        <div class="chart-label">평가금 추이</div>
+        <div class="chart-legend">
+          <div class="legend-item"><div class="legend-dot" style="background:#f1f5f9;"></div>평가금</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#60a5fa; border-radius:2px;"></div>V2</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#22c55e; border-radius:2px;"></div>Vlow</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#ef4444; border-radius:2px;"></div>Vhigh</div>
+        </div>
+        <canvas id="evalChart" style="width:100%; height:200px; border-radius:8px; background:#0f172a; display:block;"></canvas>
+      </div>`;
+  }
+
+  // Trade list
+  if (trades.length === 0) {
+    html += '<div class="table-empty">체결 내역이 없습니다<br><span class="c-muted">위에서 카카오톡 문자를 붙여넣어 등록하세요</span></div>';
+  } else {
+    html += `<div style="margin: 12px 14px 0;">
+      <div style="font-size:11px; color:#64748b; margin-bottom:8px; text-transform:uppercase; letter-spacing:.06em; font-weight:600;">체결 내역 (최신순)</div>`;
+
+    for (const t of [...trades].reverse()) {
+      const col = t.type === '매수' ? '#22c55e' : '#ef4444';
+      html += `
+        <div class="trade-item">
+          <div class="row" style="margin-bottom:5px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span style="font-weight:700; color:${col}; font-size:15px;">${t.type}</span>
+              <span class="c-muted" style="font-size:12px;">${t.date} · ${t.cycleWeek ?? t.cycleNum}주차</span>
+            </div>
+            <button onclick="deleteTrade(${t.id})"
+              style="background:none; border:1px solid #334155; color:#64748b; border-radius:6px;
+                     padding:3px 9px; font-size:11px; cursor:pointer;">삭제</button>
+          </div>
+          <div class="row" style="font-size:13px; margin-bottom:3px;">
+            <span class="c-muted">$${t.price.toFixed(4)} × ${t.qty}주</span>
+            <span style="font-weight:600;">${fmtAmt(t.amount)}</span>
+          </div>
+          <div class="row" style="font-size:11px; color:#475569;">
+            <span>평가금 ${fmt(t.evalSnap)}</span>
+            <span>Pool ${fmt(t.poolAfter)}</span>
+          </div>
+        </div>`;
+    }
+    html += '</div>';
+  }
+
+  cont.innerHTML = html;
+
+  if (trades.length > 0) {
+    requestAnimationFrame(() => drawEvalChart(trades));
+  }
+}
+
+/* ============================================================
+   Canvas chart
+   ============================================================ */
+function drawEvalChart(trades) {
+  const canvas = document.getElementById('evalChart');
+  if (!canvas) return;
+
+  const dpr  = window.devicePixelRatio || 1;
+  const rect  = canvas.getBoundingClientRect();
+  canvas.width  = rect.width  * dpr;
+  canvas.height = rect.height * dpr;
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const W = rect.width, H = rect.height;
+  const P = { top: 12, right: 12, bottom: 28, left: 54 };
+  const pw = W - P.left - P.right;
+  const ph = H - P.top  - P.bottom;
+
+  const pts = trades.map((t, i) => ({
+    i, eval: t.evalSnap, v2: t.v2snap,
+    vlow: t.vlowSnap, vhigh: t.vhighSnap,
+    type: t.type, date: t.date,
+  }));
+
+  const allY = pts.flatMap(p => [p.eval, p.vlow, p.vhigh]);
+  const minY = Math.min(...allY) * 0.97;
+  const maxY = Math.max(...allY) * 1.03;
+  const rng  = maxY - minY || 1;
+
+  const tx = i => P.left + (pts.length <= 1 ? pw / 2 : i / (pts.length - 1) * pw);
+  const ty = v => P.top  + ph - (v - minY) / rng * ph;
+
+  // Background already #0f172a via CSS
+
+  // V band fill
+  ctx.beginPath();
+  pts.forEach((p, i) => i === 0 ? ctx.moveTo(tx(i), ty(p.vlow)) : ctx.lineTo(tx(i), ty(p.vlow)));
+  [...pts].reverse().forEach((p, i) => ctx.lineTo(tx(pts.length - 1 - i), ty(p.vhigh)));
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(34,197,94,0.05)';
+  ctx.fill();
+
+  // Dashed lines: vlow, vhigh, v2
+  const dashLine = (key, color) => {
+    ctx.beginPath(); ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = color; ctx.lineWidth = 1;
+    pts.forEach((p, i) => i === 0 ? ctx.moveTo(tx(i), ty(p[key])) : ctx.lineTo(tx(i), ty(p[key])));
+    ctx.stroke();
+  };
+  dashLine('vlow',  'rgba(34,197,94,0.55)');
+  dashLine('vhigh', 'rgba(239,68,68,0.55)');
+  dashLine('v2',    'rgba(96,165,250,0.45)');
+
+  // Eval line
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2;
+  pts.forEach((p, i) => i === 0 ? ctx.moveTo(tx(i), ty(p.eval)) : ctx.lineTo(tx(i), ty(p.eval)));
+  ctx.stroke();
+
+  // Trade dots
+  pts.forEach(p => {
+    ctx.beginPath();
+    ctx.arc(tx(p.i), ty(p.eval), 4.5, 0, Math.PI * 2);
+    ctx.fillStyle   = p.type === '매수' ? '#22c55e' : '#ef4444';
+    ctx.fill();
+    ctx.strokeStyle = '#0f172a'; ctx.lineWidth = 1.5;
+    ctx.stroke();
+  });
+
+  // Y axis labels
+  ctx.fillStyle = '#475569'; ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (let i = 0; i <= 4; i++) {
+    const v = minY + rng * i / 4;
+    const label = Math.abs(v) >= 1000
+      ? '$' + (v / 1000).toFixed(1) + 'k'
+      : '$' + v.toFixed(0);
+    ctx.fillText(label, P.left - 5, ty(v));
+  }
+
+  // X axis date labels (up to 5)
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const step = Math.max(1, Math.ceil(pts.length / 5));
+  pts.forEach((p, i) => {
+    if (i % step === 0 || i === pts.length - 1) {
+      ctx.fillText(p.date, tx(i), H - P.bottom + 5);
+    }
+  });
+}
+
+/* ============================================================
+   Cycle rollover (V2 → V1)
+   ============================================================ */
+function rolloverCycle() {
+  const v1        = loadNum(KEYS.v1);
+  const shares    = loadNum(KEYS.shares);
+  const pool      = loadNum(KEYS.pool);
+  const g         = loadNum(KEYS.g) || 10;
+  const e         = currentPrice !== null ? currentPrice * shares : v1;
+  const v2        = v1 + pool / g + (e - v1) / (2 * Math.sqrt(g));
+  const startWeek = load(KEYS.startWeek) || '';
+  const cycleInfo = getCycleInfo(startWeek);
+
+  // 이중 안전장치 ①: 사이클 미종료 시 차단
+  if (!cycleInfo || !cycleInfo.isEnded) {
+    alert('사이클이 아직 종료되지 않았습니다.\n토요일 06:10 KST 이후에 실행하세요.');
+    return;
+  }
+
+  // 이중 안전장치 ②: 이미 롤오버 완료된 사이클이면 차단
+  const lastRollover = parseInt(load(KEYS.lastRolloverWeek) ?? '-1');
+  if (lastRollover === cycleInfo.cycleWeek) {
+    alert('이번 사이클은 이미 롤오버 완료되었습니다.');
+    return;
+  }
+
+  if (!confirm(`V2: ${fmtAmt(v2)}\n\n이 값을 새 사이클(${cycleInfo.cycleWeek + 2}주차)의 V1으로 설정합니다.\n계속하시겠습니까?`)) return;
+
+  save(KEYS.v1,               v2);
+  save(KEYS.cycleStartPool,   pool);
+  save(KEYS.lastRolloverWeek, cycleInfo.cycleWeek); // 완료 플래그 저장
+
+  autoGistPush(); // 롤오버 시 자동 동기화
+  calculateAndRender();
+}
+
+/* ============================================================
+   Tab switching
+   ============================================================ */
+const TAB_IDS = { main: 'tabMain', buy: 'tabBuy', sell: 'tabSell', history: 'tabHistory' };
+let activeTab = 'main';
+
+function switchTab(tab) {
+  activeTab = tab;
+  for (const [key, id] of Object.entries(TAB_IDS)) {
+    document.getElementById(id).classList.toggle('hidden', key !== tab);
+    document.getElementById(`tab-${key}`).classList.toggle('active', key === tab);
+  }
+  if (tab === 'history') renderHistory();
+}
+
+/* ============================================================
+   Core calculation & render
+   ============================================================ */
+function calculateAndRender() {
+  const v1        = loadNum(KEYS.v1);
+  const shares    = loadNum(KEYS.shares);
+  const pool      = loadNum(KEYS.pool);
+  const g         = loadNum(KEYS.g) || 10;
+  const startWeek = load(KEYS.startWeek) || '';
+  const unitQty   = loadNum(KEYS.unitQty) || 1;
+
+  const eval_ = currentPrice !== null ? currentPrice * shares : null;
+  const e     = eval_ !== null ? eval_ : v1;   // 현재가 없으면 보정항 0
+  const v2    = v1 + pool / g + (e - v1) / (2 * Math.sqrt(g));
+  const vlow  = v2 * 0.85;
+  const vhigh = v2 * 1.15;
+
+  // ── Static values ──
+  document.getElementById('v1Display').textContent        = fmt(v1);
+  document.getElementById('v2Value').textContent          = fmt(v2);
+  document.getElementById('vlowValue').textContent        = fmt(vlow);
+  document.getElementById('vhighValue').textContent       = fmt(vhigh);
+  document.getElementById('sharesDisplay').textContent    = `${shares}주`;
+  document.getElementById('gDisplay').textContent         = g;
+  document.getElementById('startWeekDisplay').textContent = startWeek || '--';
+  document.getElementById('unitQtyDisplay').textContent   = `${unitQty}주`;
+
+  // ── Eval & status ──
+  const evalEl = document.getElementById('evalAmount'), statusEl = document.getElementById('evalStatus');
+  if (eval_ !== null) {
+    evalEl.textContent = fmt(eval_);
+    if      (eval_ < vlow)  { evalEl.className = 'metric-value c-green'; statusEl.textContent = '매수 구간'; statusEl.className = 'badge badge-buy'; }
+    else if (eval_ > vhigh) { evalEl.className = 'metric-value c-red';   statusEl.textContent = '매도 구간'; statusEl.className = 'badge badge-sell'; }
+    else                    { evalEl.className = 'metric-value c-blue';   statusEl.textContent = '밴드 내';   statusEl.className = 'badge badge-band'; }
+  } else {
+    evalEl.textContent = '--'; evalEl.className = 'metric-value';
+    statusEl.textContent = '가격 미입력'; statusEl.className = 'badge badge-none';
+  }
+
+  // ── Pool bar (cycle buy usage) ──
+  const trades = loadTrades();
+  const cycleInfo = getCycleInfo(startWeek);
+  const curCycle  = cycleInfo ? cycleInfo.cycleWeek : 0;
+  const basePool  = loadNum(KEYS.cycleStartPool) || pool;
+  const buyUsed   = trades.filter(t => (t.cycleWeek ?? t.cycleNum) === curCycle && t.type === '매수')
+                          .reduce((s, t) => s + t.amount, 0);
+  const poolLim   = basePool * 0.75;
+  const usedPct   = poolLim > 0 ? Math.min(100, buyUsed / poolLim * 100) : 0;
+
+  document.getElementById('poolRemain').textContent  = fmt(pool);
+  document.getElementById('poolLimit').textContent   = fmt(poolLim);
+  document.getElementById('poolUsedLabel').textContent = `이번 사이클 매수: ${fmt(buyUsed)}`;
+  document.getElementById('poolPctLabel').textContent  = `${usedPct.toFixed(0)}% / 75%`;
+
+  const fill = document.getElementById('poolFill');
+  fill.style.width = usedPct + '%';
+  fill.className   = 'pool-fill' + (usedPct >= 100 ? ' danger' : usedPct >= 70 ? ' warn' : '');
+
+  // ── Cycle card ──
+  if (startWeek && cycleInfo) {
+    const c      = cycleInfo;
+    const label  = `${c.cycleWeek}주차 사이클`;
+    const remain = c.daysRemaining !== null ? `D-${c.daysRemaining} 남음` : '시작 전';
+
+    document.getElementById('cycleInfo').textContent        = `${label} | ${c.isEnded ? '사이클 마감' : remain}`;
+    document.getElementById('cycleNumDisplay').textContent  = `${c.cycleWeek}주차`;
+    document.getElementById('cycleStartDisplay').textContent = fmtDate(c.startDate);
+    document.getElementById('cycleEndDisplay').textContent   = fmtDate(c.endDate);
+
+    const ddEl = document.getElementById('cycleDday');
+    if      (c.isEnded)               { ddEl.textContent = '사이클 마감'; ddEl.className = 'cycle-dday ended'; }
+    else if (c.daysRemaining === null) { ddEl.textContent = '시작 전';    ddEl.className = 'cycle-dday ok'; }
+    else if (c.daysRemaining <= 2)    { ddEl.textContent = `D-${c.daysRemaining}`; ddEl.className = 'cycle-dday soon'; }
+    else                               { ddEl.textContent = `D-${c.daysRemaining}`; ddEl.className = 'cycle-dday ok'; }
+
+    const banner    = document.getElementById('cycleEndedBanner');
+    const doneBox   = document.getElementById('rolloverDoneBox');
+    const lastRollover = parseInt(load(KEYS.lastRolloverWeek) ?? '-1');
+    const alreadyDone  = lastRollover === c.cycleWeek;
+    // 초기 입력 당시 이미 끝나있던 사이클이면 배너 숨김
+    const setupAt = parseInt(load(KEYS.setupAt) || '0');
+    const cycleEndedBeforeSetup = c.endMs !== undefined && c.endMs <= setupAt;
+
+    if (c.isEnded && !alreadyDone && !cycleEndedBeforeSetup) {
+      // 마감 + 미완료 → 실행 배너
+      document.getElementById('rolloverSubText').textContent =
+        `V2 (${fmtAmt(v2)}) → ${c.cycleWeek + 2}주차 V1으로 설정`;
+      banner.classList.remove('hidden');
+      doneBox.classList.add('hidden');
+    } else if (c.isEnded && alreadyDone) {
+      // 마감 + 완료 → 완료 표시
+      banner.classList.add('hidden');
+      document.getElementById('rolloverDoneText').textContent =
+        `${c.cycleWeek}주차 → ${c.cycleWeek + 2}주차 롤오버 완료`;
+      doneBox.classList.remove('hidden');
+    } else {
+      // 미마감 → 둘 다 숨김
+      banner.classList.add('hidden');
+      doneBox.classList.add('hidden');
+    }
+  }
+
+  // ── Buy / Sell tables ──
+  renderBuyTable(currentPrice, shares, vlow, pool, unitQty);
+  renderSellTable(currentPrice, shares, vhigh, unitQty);
+
+  // ── History tab (if open) ──
+  if (activeTab === 'history') renderHistory();
+}
+
+/* ============================================================
+   Screen management
+   ============================================================ */
+function showDashboard() {
+  document.getElementById('setupScreen').classList.add('hidden');
+  document.getElementById('dashboardScreen').classList.remove('hidden');
+  calculateAndRender();
+  fetchPrice();
+}
+
+function confirmReset() {
+  if (!confirm('모든 설정과 히스토리를 초기화하시겠습니까?\n저장된 데이터가 모두 삭제됩니다.')) return;
+  Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+  location.reload();
+}
+
+/* ============================================================
+   Phase 5 — Settings modal
+   ============================================================ */
+function openSettings() {
+  document.getElementById('edit_g').value       = loadNum(KEYS.g) || 10;
+  document.getElementById('edit_pool').value    = loadNum(KEYS.pool);
+  document.getElementById('edit_unitQty').value = loadNum(KEYS.unitQty) || 1;
+  document.getElementById('edit_pat').value     = load(KEYS.githubPat) || '';
+  document.getElementById('edit_gistId').value  = load(KEYS.gistId) || '';
+  document.getElementById('syncStatus').textContent = '';
+  document.getElementById('settingsModal').classList.remove('hidden');
+}
+
+function closeSettings() {
+  document.getElementById('settingsModal').classList.add('hidden');
+}
+
+function modalOverlayClick(e) {
+  if (e.target === document.getElementById('settingsModal')) closeSettings();
+}
+
+function saveSettings() {
+  const g       = parseFloat(document.getElementById('edit_g').value);
+  const pool    = parseFloat(document.getElementById('edit_pool').value);
+  const unitQty = parseInt(document.getElementById('edit_unitQty').value);
+
+  if (!g || g <= 0)           { alert('G값을 올바르게 입력하세요.');   return; }
+  if (isNaN(pool) || pool < 0){ alert('Pool 값을 올바르게 입력하세요.'); return; }
+  if (!unitQty || unitQty < 1){ alert('단위 수량은 1 이상이어야 합니다.'); return; }
+
+  const poolChanged = pool !== loadNum(KEYS.pool);
+
+  save(KEYS.g,       g);
+  save(KEYS.pool,    pool);
+  save(KEYS.unitQty, unitQty);
+
+  // Pool 변경 시 사이클 기준도 동기화
+  if (poolChanged) save(KEYS.cycleStartPool, pool);
+
+  closeSettings();
+  calculateAndRender();
+}
+
+/* ============================================================
+   GitHub Gist 동기화
+   ============================================================ */
+// 자동 pull — 앱 시작 시 1회, 클라우드 → 로컬 덮어씀 (충돌 방지)
+async function autoGistPull() {
+  const pat    = load(KEYS.githubPat);
+  const gistId = load(KEYS.gistId);
+  if (!pat || !gistId) return;
+
+  try {
+    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: {
+        'Authorization': `token ${pat}`,
+        'Accept': 'application/vnd.github.v3+json',
+      },
+    });
+    if (!res.ok) return;
+    const json    = await res.json();
+    const content = json.files?.['vr_data.json']?.content;
+    if (!content) return;
+    const data = JSON.parse(content);
+    SYNC_KEYS.forEach(k => { if (data[k] !== undefined) localStorage.setItem(k, data[k]); });
+    // 헤더에 잠깐 표시
+    showSyncBadge('↓ 클라우드 동기화 완료');
+  } catch (_) { /* 네트워크 오류 무시 — 로컬 데이터로 계속 */ }
+}
+
+// 자동 push — PAT·GistID 없으면 조용히 건너뜀, 실패해도 사용자에게 알리지 않음
+async function autoGistPush() {
+  const pat    = load(KEYS.githubPat);
+  const gistId = load(KEYS.gistId);
+  if (!pat || !gistId) return; // 동기화 미설정 기기는 무시
+
+  const data = {};
+  SYNC_KEYS.forEach(k => { const v = localStorage.getItem(k); if (v !== null) data[k] = v; });
+
+  try {
+    await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `token ${pat}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        files: { 'vr_data.json': { content: JSON.stringify(data, null, 2) } },
+      }),
+    });
+  } catch (_) { /* 네트워크 오류 무시 */ }
+}
+
+function syncStatusMsg(msg, color) {
+  const el = document.getElementById('syncStatus');
+  if (el) { el.textContent = msg; el.style.color = color || '#94a3b8'; }
+}
+
+// PAT·GistID 입력값을 읽어 localStorage에 저장
+function saveSyncCredentials() {
+  const pat    = document.getElementById('edit_pat').value.trim();
+  const gistId = document.getElementById('edit_gistId').value.trim();
+  if (pat)    save(KEYS.githubPat, pat);
+  if (gistId) save(KEYS.gistId,   gistId);
+  return { pat, gistId };
+}
+
+async function gistSave() {
+  const { pat, gistId } = saveSyncCredentials();
+  if (!pat) { syncStatusMsg('GitHub PAT를 입력하세요.', '#f59e0b'); return; }
+
+  // 동기화 대상 데이터 수집
+  const data = {};
+  SYNC_KEYS.forEach(k => { const v = localStorage.getItem(k); if (v !== null) data[k] = v; });
+
+  const body = {
+    description: 'VR Dashboard Data',
+    public: false,
+    files: { 'vr_data.json': { content: JSON.stringify(data, null, 2) } },
+  };
+  const headers = {
+    'Authorization': `token ${pat}`,
+    'Accept': 'application/vnd.github.v3+json',
+    'Content-Type': 'application/json',
+  };
+
+  try {
+    syncStatusMsg('저장 중…', '#60a5fa');
+    let res, json;
+    if (gistId) {
+      // 기존 Gist 업데이트
+      res  = await fetch(`https://api.github.com/gists/${gistId}`, { method: 'PATCH', headers, body: JSON.stringify(body) });
+    } else {
+      // 새 Gist 생성
+      res  = await fetch('https://api.github.com/gists', { method: 'POST', headers, body: JSON.stringify(body) });
+    }
+    json = await res.json();
+    if (!res.ok) {
+      syncStatusMsg(`오류: ${json.message || res.status}`, '#ef4444');
+      return;
+    }
+    // 새로 생성된 경우 ID 저장 & 화면 반영
+    if (!gistId && json.id) {
+      save(KEYS.gistId, json.id);
+      document.getElementById('edit_gistId').value = json.id;
+    }
+    syncStatusMsg('✓ 저장 완료 · ' + new Date().toLocaleTimeString('ko-KR', { hour:'2-digit', minute:'2-digit' }), '#22c55e');
+  } catch (e) {
+    syncStatusMsg('네트워크 오류: ' + e.message, '#ef4444');
+  }
+}
+
+async function gistLoad() {
+  const { pat, gistId } = saveSyncCredentials();
+  if (!pat)    { syncStatusMsg('GitHub PAT를 입력하세요.', '#f59e0b'); return; }
+  if (!gistId) { syncStatusMsg('Gist ID를 입력하세요.', '#f59e0b'); return; }
+
+  try {
+    syncStatusMsg('불러오는 중…', '#60a5fa');
+    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: { 'Authorization': `token ${pat}`, 'Accept': 'application/vnd.github.v3+json' },
+    });
+    const json = await res.json();
+    if (!res.ok) { syncStatusMsg(`오류: ${json.message || res.status}`, '#ef4444'); return; }
+
+    const fileContent = json.files?.['vr_data.json']?.content;
+    if (!fileContent) { syncStatusMsg('Gist에 데이터가 없습니다.', '#f59e0b'); return; }
+
+    const data = JSON.parse(fileContent);
+
+    // 덮어쓰기 확인
+    if (!confirm('클라우드 데이터를 불러오면 현재 기기의 데이터가 덮어씌워집니다.\n계속하시겠습니까?')) {
+      syncStatusMsg('취소됨', '#64748b'); return;
+    }
+
+    SYNC_KEYS.forEach(k => {
+      if (data[k] !== undefined) localStorage.setItem(k, data[k]);
+    });
+
+    syncStatusMsg('✓ 불러오기 완료. 새로고침합니다…', '#22c55e');
+    setTimeout(() => location.reload(), 1200);
+  } catch (e) {
+    syncStatusMsg('오류: ' + e.message, '#ef4444');
+  }
+}
+
+// 헤더 아래 잠깐 표시되는 동기화 뱃지
+function showSyncBadge(msg) {
+  let el = document.getElementById('syncBadge');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'syncBadge';
+    el.style.cssText = 'position:fixed;top:56px;left:50%;transform:translateX(-50%);' +
+      'background:#1d4ed8;color:#bfdbfe;font-size:11px;padding:4px 14px;' +
+      'border-radius:0 0 8px 8px;z-index:500;transition:opacity .4s;max-width:480px;width:100%;text-align:center;';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 2500);
+}
+
+/* ============================================================
+   Boot
+   ============================================================ */
+document.addEventListener('DOMContentLoaded', async () => {
+  // 앱 시작 시 자동 pull (탭 세션당 1회 — 수동 불러오기 후 reload 루프 방지)
+  if (!sessionStorage.getItem('vr_auto_pulled')) {
+    sessionStorage.setItem('vr_auto_pulled', '1');
+    await autoGistPull();
+  }
+
+  if (hasSetup()) showDashboard();
+  else document.getElementById('setupScreen').classList.remove('hidden');
+});
+</script>
+</body>
+</html>
