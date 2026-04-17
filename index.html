@@ -376,6 +376,7 @@
         <div class="metric-item">
           <div class="metric-label">V2</div>
           <div class="metric-value c-blue" id="v2Value">--</div>
+          <button onclick="recalcV2()" style="margin-top:7px; width:100%; background:#0f172a; border:1px solid #1d4ed8; color:#60a5fa; border-radius:6px; padding:5px 0; font-size:11px; cursor:pointer;">↻ 현재가로 갱신</button>
         </div>
         <div class="metric-item">
           <div class="metric-label">Vlow (×0.85)</div>
@@ -766,6 +767,20 @@ function applyManualPrice() {
 }
 
 function refreshPrice() { fetchPrice(); }
+
+function recalcV2() {
+  if (!currentPrice) { alert('현재가를 먼저 입력하세요.'); return; }
+  const v1     = loadNum(KEYS.v1);
+  const shares = loadNum(KEYS.shares);
+  const pool   = loadNum(KEYS.pool);
+  const g      = loadNum(KEYS.g) || 10;
+  const ci     = getCycleInfo(load(KEYS.startWeek) || '');
+  const curWeek = ci ? ci.cycleWeek : 0;
+  const v2 = v1 + pool / g + (currentPrice * shares - v1) / (2 * Math.sqrt(g));
+  save(KEYS.v2, v2);
+  save(KEYS.v2ForCycle, curWeek);
+  calculateAndRender();
+}
 
 function adjustBuyUnit(delta) {
   buyUnit = Math.max(1, (buyUnit !== null ? buyUnit : (loadNum(KEYS.unitQty) || 1)) + delta);
