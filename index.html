@@ -565,11 +565,14 @@ const KEYS = {
   setupAt:          'vr_setup_at',           // 초기 입력 시각 (ms) — 이전 사이클 배너 차단용
   githubPat:        'vr_github_pat',         // GitHub Personal Access Token (로컬 전용)
   gistId:           'vr_gist_id',            // 생성된 Gist ID (로컬 전용)
+  v2:               'vr_v2',                 // 사이클 시작 시 고정된 V2
+  v2ForCycle:       'vr_v2_for_cycle',       // v2가 계산된 사이클 주차 (재계산 방지)
 };
 
 // 클라우드 동기화 대상 키 (PAT·GistID는 제외 — 기기마다 따로 관리)
 const SYNC_KEYS = ['vr_v1','vr_shares','vr_pool','vr_g','vr_start_week',
-                   'vr_unit_qty','vr_trades','vr_cycle_start_pool','vr_last_rollover_week'];
+                   'vr_unit_qty','vr_trades','vr_cycle_start_pool','vr_last_rollover_week',
+                   'vr_v2','vr_v2_for_cycle'];
 
 const save    = (k, v) => localStorage.setItem(k, String(v));
 const load    = (k)    => localStorage.getItem(k);
@@ -617,6 +620,8 @@ function saveSetup() {
   save(KEYS.unitQty,        unitQty);
   save(KEYS.cycleStartPool, pool);  // baseline for pool bar
   save(KEYS.setupAt,        Date.now()); // 초기 입력 시각 기록
+  localStorage.removeItem(KEYS.v2);         // 이전 v2 캐시 초기화
+  localStorage.removeItem(KEYS.v2ForCycle);
 
   showDashboard();
 }
@@ -963,8 +968,7 @@ function confirmTrade() {
   const cycleWeek = cycleInfo ? cycleInfo.cycleWeek : 0;
 
   const evalSnap  = t.price * (t.type === '매수' ? shares + t.qty : shares - t.qty);
-  const e     = currentPrice !== null ? currentPrice * shares : v1;
-  const v2    = v1 + pool / g + (e - v1) / (2 * Math.sqrt(g));
+  const v2    = loadNum(KEYS.v2) || (v1 + pool / g);
   const vlow  = v2 * 0.85;
   const vhigh = v2 * 1.15;
 
@@ -1203,8 +1207,7 @@ function rolloverCycle() {
   const shares    = loadNum(KEYS.shares);
   const pool      = loadNum(KEYS.pool);
   const g         = loadNum(KEYS.g) || 10;
-  const e         = currentPrice !== null ? currentPrice * shares : v1;
-  const v2        = v1 + pool / g + (e - v1) / (2 * Math.sqrt(g));
+  const v2        = loadNum(KEYS.v2) || (v1 + pool / g);
   const startWeek = load(KEYS.startWeek) || '';
   const cycleInfo = getCycleInfo(startWeek);
 
@@ -1258,8 +1261,21 @@ function calculateAndRender() {
   const unitQty   = loadNum(KEYS.unitQty) || 1;
 
   const eval_ = currentPrice !== null ? currentPrice * shares : null;
-  const e     = eval_ !== null ? eval_ : v1;   // 현재가 없으면 보정항 0
-  const v2    = v1 + pool / g + (e - v1) / (2 * Math.sqrt(g));
+
+  // V2: 사이클 시작 시 현재가가 처음 들어오는 순간 1회 계산 후 고정
+  const _ci          = getCycleInfo(startWeek);
+  const _curWeek     = _ci ? _ci.cycleWeek : 0;
+  const _v2ForCycle  = parseInt(load(KEYS.v2ForCycle) ?? '-99');
+  let v2;
+  if (currentPrice !== null && _v2ForCycle !== _curWeek) {
+    v2 = v1 + pool / g + (currentPrice * shares - v1) / (2 * Math.sqrt(g));
+    save(KEYS.v2, v2);
+    save(KEYS.v2ForCycle, _curWeek);
+  } else if (_v2ForCycle === _curWeek) {
+    v2 = loadNum(KEYS.v2);
+  } else {
+    v2 = v1 + pool / g; // 현재가 미입력 시 fallback
+  }
   const vlow  = v2 * 0.85;
   const vhigh = v2 * 1.15;
 
