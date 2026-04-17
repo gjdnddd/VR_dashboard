@@ -272,6 +272,15 @@
     }
     .edit-settings-btn:active { border-color: #3b82f6; color: #60a5fa; }
 
+    /* ── Unit adjust buttons ── */
+    .unit-adj-btn {
+      background: #0f172a; border: 1px solid #334155; color: #94a3b8;
+      border-radius: 6px; width: 28px; height: 28px; font-size: 16px; line-height: 1;
+      cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .unit-adj-btn:active { border-color: #3b82f6; color: #60a5fa; }
+
     /* ── Utility ── */
     .err    { color: #ef4444; font-size: 13px; margin-top: 10px; text-align: center; }
     .hidden { display: none !important; }
@@ -313,7 +322,7 @@
     <div class="form-group">
       <label>테이블 단위 수량 (주)</label>
       <input type="number" id="inp_unitQty" placeholder="기본값: 1" value="1" inputmode="numeric" step="1" min="1">
-      <div class="hint">10개 초과 시 자동 조정됩니다</div>
+      <div class="hint">매수/매도 탭에서 ± 버튼으로 즉시 조정 가능</div>
     </div>
 
     <button class="btn" onclick="saveSetup()">저장하고 시작하기</button>
@@ -349,7 +358,7 @@
         <span id="evalStatus" class="badge badge-none">계산 중</span>
       </div>
       <div id="manualPriceWrap" class="hidden">
-        <div style="font-size:12px; color:#f59e0b; margin-top:10px; margin-bottom:4px;">자동 조회 실패 — 현재가를 직접 입력하세요</div>
+        <div id="manualPriceLabel" style="font-size:12px; color:#64748b; margin-top:10px; margin-bottom:4px;">현재가 수정</div>
         <div class="manual-row">
           <input type="number" id="inp_manualPrice" placeholder="예: 44.50" inputmode="decimal" step="0.01">
           <button onclick="applyManualPrice()">적용</button>
@@ -512,7 +521,7 @@
     <div class="form-group">
       <label>테이블 단위 수량 (주)</label>
       <input type="number" id="edit_unitQty" inputmode="numeric" step="1" min="1">
-      <div class="modal-hint">10개 초과 시 자동 조정됩니다</div>
+      <div class="modal-hint">매수/매도 탭에서 ± 버튼으로 즉시 조정 가능</div>
     </div>
 
     <button class="btn" onclick="saveSettings()">저장</button>
@@ -695,6 +704,8 @@ function fmtDate(d) {
    Price fetch
    ============================================================ */
 let currentPrice = null;
+let buyUnit  = null;  // null = use stored unitQty
+let sellUnit = null;
 
 async function fetchPrice() {
   setUI('loading');
@@ -734,7 +745,17 @@ function applyPrice(price, source) {
   document.getElementById('lastUpdated').textContent  =
     (source === 'auto' ? '자동 ' : '수동 ') +
     new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-  document.getElementById('manualPriceWrap').classList.add('hidden');
+  // 자동 로딩 후에도 항상 수정 입력창 표시
+  const labelEl = document.getElementById('manualPriceLabel');
+  if (source === 'auto') {
+    labelEl.textContent = '현재가 수정';
+    labelEl.style.color = '#64748b';
+  } else {
+    labelEl.textContent = '수동 입력됨';
+    labelEl.style.color = '#22c55e';
+  }
+  document.getElementById('inp_manualPrice').value = price.toFixed(2);
+  document.getElementById('manualPriceWrap').classList.remove('hidden');
   calculateAndRender();
 }
 
@@ -746,12 +767,24 @@ function applyManualPrice() {
 
 function refreshPrice() { fetchPrice(); }
 
+function adjustBuyUnit(delta) {
+  buyUnit = Math.max(1, (buyUnit !== null ? buyUnit : (loadNum(KEYS.unitQty) || 1)) + delta);
+  calculateAndRender();
+}
+function adjustSellUnit(delta) {
+  sellUnit = Math.max(1, (sellUnit !== null ? sellUnit : (loadNum(KEYS.unitQty) || 1)) + delta);
+  calculateAndRender();
+}
+
 function setUI(state) {
   if (state === 'loading') {
     document.getElementById('currentPrice').textContent = '로딩 중…';
     document.getElementById('manualPriceWrap').classList.add('hidden');
   } else {
     document.getElementById('currentPrice').textContent = '--';
+    const labelEl = document.getElementById('manualPriceLabel');
+    labelEl.textContent = '자동 조회 실패 — 현재가를 직접 입력하세요';
+    labelEl.style.color = '#f59e0b';
     document.getElementById('manualPriceWrap').classList.remove('hidden');
   }
 }
@@ -827,19 +860,20 @@ function calcSellTable(price, shares, vhigh, base) {
 /* ============================================================
    Table renderers
    ============================================================ */
-function renderBuyTable(price, shares, vlow, pool, base) {
+function renderBuyTable(price, shares, vlow, pool, unit) {
   const el = document.getElementById('buyContent');
   if (!price) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
 
-  const { rows, unit } = calcBuyTable(price, shares, vlow, pool, base);
+  const rows = runBuySimulation(price, shares, vlow, pool, unit);
   const floor = price * 0.80, lim = pool * 0.75;
-  const adj   = unit !== base;
 
   let html = `
-    <div class="tbl-title tbl-title-buy">▼ 매수 테이블
-      <span style="font-size:12px; font-weight:400;" class="${adj ? 'c-yellow' : 'c-muted'}">
-        단위${adj ? ' 자동조정' : ''}: ${unit}주
-      </span>
+    <div class="tbl-title tbl-title-buy" style="justify-content:space-between;">▼ 매수 테이블
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button class="unit-adj-btn" onclick="adjustBuyUnit(-1)">−</button>
+        <span style="font-size:13px; color:#94a3b8; min-width:36px; text-align:center;">${unit}주</span>
+        <button class="unit-adj-btn" onclick="adjustBuyUnit(1)">+</button>
+      </div>
     </div>
     <div class="tbl-summary">
       <div class="row"><span class="c-muted">Vlow</span><span class="c-green">${fmt(vlow)}</span></div>
@@ -863,19 +897,20 @@ function renderBuyTable(price, shares, vlow, pool, base) {
   el.innerHTML = html;
 }
 
-function renderSellTable(price, shares, vhigh, base) {
+function renderSellTable(price, shares, vhigh, unit) {
   const el = document.getElementById('sellContent');
   if (!price) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
 
-  const { rows, unit } = calcSellTable(price, shares, vhigh, base);
+  const rows = runSellSimulation(price, shares, vhigh, unit);
   const ceil = price * 1.20;
-  const adj  = unit !== base;
 
   let html = `
-    <div class="tbl-title tbl-title-sell">▲ 매도 테이블
-      <span style="font-size:12px; font-weight:400;" class="${adj ? 'c-yellow' : 'c-muted'}">
-        단위${adj ? ' 자동조정' : ''}: ${unit}주
-      </span>
+    <div class="tbl-title tbl-title-sell" style="justify-content:space-between;">▲ 매도 테이블
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button class="unit-adj-btn" onclick="adjustSellUnit(-1)">−</button>
+        <span style="font-size:13px; color:#94a3b8; min-width:36px; text-align:center;">${unit}주</span>
+        <button class="unit-adj-btn" onclick="adjustSellUnit(1)">+</button>
+      </div>
     </div>
     <div class="tbl-summary">
       <div class="row"><span class="c-muted">Vhigh</span><span class="c-red">${fmt(vhigh)}</span></div>
@@ -1365,8 +1400,10 @@ function calculateAndRender() {
   }
 
   // ── Buy / Sell tables ──
-  renderBuyTable(currentPrice, shares, vlow, pool, unitQty);
-  renderSellTable(currentPrice, shares, vhigh, unitQty);
+  const effectiveBuyUnit  = buyUnit  !== null ? buyUnit  : unitQty;
+  const effectiveSellUnit = sellUnit !== null ? sellUnit : unitQty;
+  renderBuyTable(currentPrice, shares, vlow, pool, effectiveBuyUnit);
+  renderSellTable(currentPrice, shares, vhigh, effectiveSellUnit);
 
   // ── History tab (if open) ──
   if (activeTab === 'history') renderHistory();
@@ -1427,6 +1464,9 @@ function saveSettings() {
   // Pool 변경 시 사이클 기준도 동기화
   if (poolChanged) save(KEYS.cycleStartPool, pool);
 
+  // 단위수량 변경 시 테이블 단위 초기화
+  buyUnit  = null;
+  sellUnit = null;
   closeSettings();
   calculateAndRender();
 }
