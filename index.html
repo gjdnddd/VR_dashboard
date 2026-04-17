@@ -272,6 +272,21 @@
     }
     .edit-settings-btn:active { border-color: #3b82f6; color: #60a5fa; }
 
+    /* ── Manual trade form ── */
+    .manual-input {
+      width: 100%; background: #0f172a; border: 1px solid #334155;
+      border-radius: 8px; padding: 10px 12px; color: #f1f5f9;
+      font-size: 15px; outline: none; transition: border-color .15s;
+    }
+    .manual-input:focus { border-color: #3b82f6; }
+    .trade-type-btn {
+      flex: 1; padding: 10px; border-radius: 8px; font-size: 14px;
+      font-weight: 600; cursor: pointer; transition: all .15s;
+    }
+    .trade-type-buy  { border: 2px solid #15803d; background: #15803d; color: #bbf7d0; }
+    .trade-type-sell { border: 2px solid #b91c1c; background: #b91c1c; color: #fecaca; }
+    .trade-type-off  { border: 1px solid #334155; background: none; color: #475569; }
+
     /* ── Unit adjust buttons ── */
     .unit-adj-btn {
       background: #0f172a; border: 1px solid #334155; color: #94a3b8;
@@ -464,19 +479,62 @@
     <div class="paste-wrap">
       <div class="paste-label">체결 문자 입력</div>
       <textarea id="inp_tradeText" class="paste-area" rows="7"
-        placeholder="카카오톡 체결 알림 문자를 전체 복사 후 붙여넣기
-예)
+        placeholder="메리츠 / 한국투자증권 체결 알림 문자 붙여넣기
+예) 메리츠
 [메리츠증권] 해외주식 주문체결 안내
 종목명 : PROSHARES QQQ 3X(TQQQ)
 매매구분 : 매도
 체결단가 : USD 48.9600
 체결수량 : 43주
 체결금액 : USD 2,105.28
-체결일자 : 04/09"></textarea>
+체결일자 : 04/09
+
+예) 한국투자증권
+[한국투자증권 체결안내]08:05
+*매매구분:매수
+*체결수량:1주
+*체결단가:USD 56.55
+*제비용:USD 0.14"></textarea>
       <button class="parse-btn" onclick="previewTrade()">파싱 확인</button>
     </div>
 
-    <!-- 파싱 미리보기 -->
+    <!-- 수동 직접 입력 -->
+    <div class="paste-wrap" style="margin-top:4px; padding-top:16px; border-top:1px solid #1e293b;">
+      <div class="paste-label">수동 직접 입력</div>
+      <div style="background:#1e293b; border-radius:10px; padding:14px; border:1px solid #334155;">
+        <div style="display:flex; gap:8px; margin-bottom:12px;">
+          <button id="manualTypeBuyBtn" class="trade-type-btn trade-type-buy" onclick="setManualType('매수')">매수</button>
+          <button id="manualTypeSellBtn" class="trade-type-btn trade-type-off" onclick="setManualType('매도')">매도</button>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px;">
+          <div>
+            <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">체결일자 (MM/DD)</div>
+            <input type="text" id="manual_date" class="manual-input" placeholder="04/18" maxlength="5">
+          </div>
+          <div>
+            <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">체결수량 (주)</div>
+            <input type="number" id="manual_qty" class="manual-input" placeholder="1" inputmode="numeric" step="1" min="1" oninput="calcManualAmount()">
+          </div>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px;">
+          <div>
+            <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">체결단가 (USD)</div>
+            <input type="number" id="manual_price" class="manual-input" placeholder="56.55" inputmode="decimal" step="0.0001" oninput="calcManualAmount()">
+          </div>
+          <div>
+            <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">제비용 (USD)</div>
+            <input type="number" id="manual_fee" class="manual-input" placeholder="0.00" inputmode="decimal" step="0.01" value="0" oninput="calcManualAmount()">
+          </div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">체결금액 (USD) <span style="color:#475569;">— 자동계산, 직접 수정 가능</span></div>
+          <input type="number" id="manual_amount" class="manual-input" placeholder="56.55" inputmode="decimal" step="0.01">
+        </div>
+        <button onclick="submitManualTrade()" class="btn" style="font-size:14px; padding:12px;">확인 후 저장</button>
+      </div>
+    </div>
+
+    <!-- 파싱/수동 미리보기 -->
     <div id="tradePreview"></div>
 
     <!-- 히스토리 리스트 + 차트 -->
@@ -952,8 +1010,9 @@ function renderSellTable(price, shares, vhigh, unit) {
    Phase 4 — 카카오톡 파싱 & 히스토리
    ============================================================ */
 function parseTrade(text) {
+  // 메리츠: "키 : 값" / 한국투자증권: "*키:값" 둘 다 지원
   const get = (label) => {
-    const m = text.match(new RegExp(label + '\\s*:\\s*([^\\n]+)'));
+    const m = text.match(new RegExp('[*]?' + label + '\\s*:\\s*([^\\n]+)'));
     return m ? m[1].trim() : null;
   };
   const typeStr   = get('매매구분');
@@ -961,20 +1020,85 @@ function parseTrade(text) {
   const qtyStr    = get('체결수량');
   const amountStr = get('체결금액');
   const dateStr   = get('체결일자');
+  const feeStr    = get('제비용');
 
-  if (!typeStr || !priceStr || !qtyStr || !amountStr) return null;
+  if (!typeStr || !priceStr || !qtyStr) return null;
 
-  const type   = typeStr.includes('매도') ? '매도' : '매수';
-  const price  = parseFloat(priceStr.replace(/USD\s*/i, '').replace(/,/g, ''));
-  const qty    = parseInt(qtyStr.replace(/\D/g, ''));
-  const amount = parseFloat(amountStr.replace(/USD\s*/i, '').replace(/,/g, ''));
-  const date   = dateStr ? dateStr.trim() : '--';
+  const type  = typeStr.includes('매도') ? '매도' : '매수';
+  const price = parseFloat(priceStr.replace(/USD\s*/i, '').replace(/,/g, ''));
+  const qty   = parseInt(qtyStr.replace(/\D/g, ''));
+  const fee   = feeStr ? (parseFloat(feeStr.replace(/USD\s*/i, '').replace(/,/g, '')) || 0) : 0;
+
+  // 체결금액: 명시 값 우선, 없으면 단가×수량 자동계산
+  let amount;
+  if (amountStr) {
+    amount = parseFloat(amountStr.replace(/USD\s*/i, '').replace(/,/g, ''));
+  } else if (!isNaN(price) && !isNaN(qty)) {
+    amount = price * qty;
+  } else {
+    return null;
+  }
+
+  // 날짜: 없으면 오늘
+  let date;
+  if (dateStr) {
+    date = dateStr.trim();
+  } else {
+    const now = new Date();
+    date = `${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')}`;
+  }
 
   if (isNaN(price) || isNaN(qty) || isNaN(amount)) return null;
-  return { type, price, qty, amount, date };
+  return { type, price, qty, amount, fee, date };
 }
 
 let pendingTrade = null;
+let manualTradeType = '매수';
+
+function setManualType(type) {
+  manualTradeType = type;
+  document.getElementById('manualTypeBuyBtn').className  = 'trade-type-btn ' + (type === '매수' ? 'trade-type-buy'  : 'trade-type-off');
+  document.getElementById('manualTypeSellBtn').className = 'trade-type-btn ' + (type === '매도' ? 'trade-type-sell' : 'trade-type-off');
+}
+
+function calcManualAmount() {
+  const price = parseFloat(document.getElementById('manual_price').value) || 0;
+  const qty   = parseInt(document.getElementById('manual_qty').value)    || 0;
+  if (price > 0 && qty > 0)
+    document.getElementById('manual_amount').value = (price * qty).toFixed(2);
+}
+
+function submitManualTrade() {
+  const date   = document.getElementById('manual_date').value.trim();
+  const price  = parseFloat(document.getElementById('manual_price').value);
+  const qty    = parseInt(document.getElementById('manual_qty').value);
+  const fee    = parseFloat(document.getElementById('manual_fee').value) || 0;
+  const amount = parseFloat(document.getElementById('manual_amount').value);
+
+  if (!date)               { alert('체결일자를 입력하세요.');  return; }
+  if (!price || price <= 0){ alert('체결단가를 입력하세요.'); return; }
+  if (!qty   || qty <= 0)  { alert('체결수량을 입력하세요.'); return; }
+  if (!amount || amount <= 0){ alert('체결금액을 입력하세요.'); return; }
+
+  pendingTrade = { type: manualTradeType, price, qty, amount, fee, date };
+  const col = manualTradeType === '매수' ? '#22c55e' : '#ef4444';
+  document.getElementById('tradePreview').innerHTML = `
+    <div class="preview-card">
+      <div class="row" style="margin-bottom:10px;">
+        <span style="font-weight:700; font-size:16px; color:${col};">${manualTradeType}</span>
+        <span class="c-muted" style="font-size:13px;">${date}</span>
+      </div>
+      <div class="preview-row"><span class="c-muted">체결단가</span><span>$${price.toFixed(4)}</span></div>
+      <div class="preview-row"><span class="c-muted">체결수량</span><span>${qty}주</span></div>
+      <div class="preview-row"><span class="c-muted">체결금액</span><span>${fmtAmt(amount)}</span></div>
+      ${fee > 0 ? `<div class="preview-row"><span class="c-muted">제비용</span><span class="c-yellow">${fmtAmt(fee)}</span></div>` : ''}
+      <div style="margin-top:12px; display:flex; gap:8px;">
+        <button onclick="confirmTrade()" class="btn" style="flex:1; padding:11px; font-size:14px;">확인 저장</button>
+        <button onclick="cancelTrade()" class="btn btn-danger" style="flex:0 0 80px; padding:11px; font-size:14px;">취소</button>
+      </div>
+    </div>`;
+  document.getElementById('tradePreview').scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
 
 function previewTrade() {
   const text   = document.getElementById('inp_tradeText').value.trim();
@@ -998,6 +1122,7 @@ function previewTrade() {
       <div class="preview-row"><span class="c-muted">체결단가</span><span>$${t.price.toFixed(4)}</span></div>
       <div class="preview-row"><span class="c-muted">체결수량</span><span>${t.qty}주</span></div>
       <div class="preview-row"><span class="c-muted">체결금액</span><span>${fmtAmt(t.amount)}</span></div>
+      ${t.fee > 0 ? `<div class="preview-row"><span class="c-muted">제비용</span><span class="c-yellow">${fmtAmt(t.fee)}</span></div>` : ''}
       <div style="margin-top:12px; display:flex; gap:8px;">
         <button onclick="confirmTrade()" class="btn" style="flex:1; padding:11px; font-size:14px;">확인 저장</button>
         <button onclick="cancelTrade()" class="btn btn-danger" style="flex:0 0 80px; padding:11px; font-size:14px;">취소</button>
@@ -1022,13 +1147,14 @@ function confirmTrade() {
   const vlow  = v2 * 0.85;
   const vhigh = v2 * 1.15;
 
+  const fee = t.fee || 0;
   const newShares = t.type === '매수' ? shares + t.qty : shares - t.qty;
-  const newPool   = t.type === '매수' ? pool - t.amount : pool + t.amount;
+  const newPool   = t.type === '매수' ? pool - t.amount - fee : pool + t.amount - fee;
 
   const record = {
     id: Date.now(), timestamp: Date.now(),
     date: t.date, type: t.type,
-    price: t.price, qty: t.qty, amount: t.amount,
+    price: t.price, qty: t.qty, amount: t.amount, fee,
     sharesAfter: newShares, poolAfter: newPool,
     cycleWeek,
     v2snap: v2, vlowSnap: vlow, vhighSnap: vhigh, evalSnap,
@@ -1044,6 +1170,11 @@ function confirmTrade() {
   pendingTrade = null;
   document.getElementById('inp_tradeText').value = '';
   document.getElementById('tradePreview').innerHTML = '';
+  // 수동 입력 폼 초기화
+  ['manual_date','manual_price','manual_qty','manual_amount'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  const mfee = document.getElementById('manual_fee'); if (mfee) mfee.value = '0';
 
   calculateAndRender();
   renderHistory();
@@ -1071,8 +1202,9 @@ function deleteTrade(id) {
   // 현재 shares/pool에서 해당 거래 효과 역산
   const curShares = loadNum(KEYS.shares);
   const curPool   = loadNum(KEYS.pool);
+  const tFee = t.fee || 0;
   const newShares = isBuy ? curShares - t.qty : curShares + t.qty;
-  const newPool   = isBuy ? curPool   + t.amount : curPool - t.amount;
+  const newPool   = isBuy ? curPool + t.amount + tFee : curPool - t.amount + tFee;
 
   save(KEYS.shares, newShares);
   save(KEYS.pool,   newPool);
@@ -1138,7 +1270,7 @@ function renderHistory() {
                      padding:3px 9px; font-size:11px; cursor:pointer;">삭제</button>
           </div>
           <div class="row" style="font-size:13px; margin-bottom:3px;">
-            <span class="c-muted">$${t.price.toFixed(4)} × ${t.qty}주</span>
+            <span class="c-muted">$${t.price.toFixed(4)} × ${t.qty}주${t.fee > 0 ? ` +수수료 ${fmtAmt(t.fee)}` : ''}</span>
             <span style="font-weight:600;">${fmtAmt(t.amount)}</span>
           </div>
           <div class="row" style="font-size:11px; color:#475569;">
@@ -1357,7 +1489,7 @@ function calculateAndRender() {
   const curCycle  = cycleInfo ? cycleInfo.cycleWeek : 0;
   const basePool  = loadNum(KEYS.cycleStartPool) || pool;
   const buyUsed   = trades.filter(t => (t.cycleWeek ?? t.cycleNum) === curCycle && t.type === '매수')
-                          .reduce((s, t) => s + t.amount, 0);
+                          .reduce((s, t) => s + t.amount + (t.fee || 0), 0);
   const poolLim   = basePool * 0.75;
   const usedPct   = poolLim > 0 ? Math.min(100, buyUsed / poolLim * 100) : 0;
 
