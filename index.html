@@ -772,17 +772,22 @@ async function fetchPrice() {
   const YF_PATH = 'https://query1.finance.yahoo.com/v8/finance/chart/TQQQ?interval=1d&range=1d';
   const YF_PATH2 = 'https://query2.finance.yahoo.com/v8/finance/chart/TQQQ?interval=1d&range=1d';
 
-  // 시도 순서: 직접 → CORS 프록시 2종
+  // 시도 순서: 직접 → CORS 프록시 다종 (모바일 호환성을 위해 타임아웃 + 프록시 추가)
   const attempts = [
     { url: YF_PATH,  parse: parseYahoo },
     { url: YF_PATH2, parse: parseYahoo },
     { url: `https://corsproxy.io/?url=${encodeURIComponent(YF_PATH)}`,  parse: parseYahoo },
     { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(YF_PATH)}`, parse: parseYahoo },
+    { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(YF_PATH)}`, parse: parseYahoo },
+    { url: `https://thingproxy.freeboard.io/fetch/${YF_PATH}`, parse: parseYahoo },
   ];
 
   for (const { url, parse } of attempts) {
     try {
-      const res = await fetch(url, { cache: 'no-cache' });
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 6000); // 6초 타임아웃
+      const res = await fetch(url, { cache: 'no-cache', signal: ctrl.signal });
+      clearTimeout(timer);
       if (!res.ok) continue;
       const json = await res.json();
       const p    = parse(json);
