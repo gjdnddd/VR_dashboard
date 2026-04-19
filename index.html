@@ -766,17 +766,7 @@ let currentPrice = null;
 let buyUnit  = null;  // null = use stored unitQty
 let sellUnit = null;
 
-function _dbgLog(msg) {
-  let el = document.getElementById('_debugBox');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = '_debugBox';
-    el.style.cssText = 'position:fixed;bottom:80px;left:0;right:0;z-index:9999;background:#000d;color:#0f0;font-size:11px;padding:8px;max-height:40vh;overflow-y:auto;word-break:break-all;font-family:monospace;';
-    document.body.appendChild(el);
-  }
-  el.innerHTML += `<div>${new Date().toLocaleTimeString('ko-KR')} ${msg}</div>`;
-  el.scrollTop = el.scrollHeight;
-}
+function _dbgLog(msg) { /* 디버그 로그 비활성화 */ }
 
 async function fetchPrice() {
   setUI('loading');
