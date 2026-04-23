@@ -296,6 +296,45 @@
     }
     .unit-adj-btn:active { border-color: #3b82f6; color: #60a5fa; }
 
+    /* ── Deposit rows (buy table) ── */
+    .deposit-row td {
+      font-size: 11px; color: #a16207;
+      padding: 2px 0 9px 6px !important;
+      border-bottom: 1px solid #1a2535 !important;
+    }
+    .deposit-row .dep-amt { color: #fbbf24; font-weight: 600; }
+
+    /* ── Verify tab ── */
+    .verify-summary-box {
+      margin: 12px 14px 0;
+      background: #0f172a; border-radius: 10px;
+      padding: 14px; border: 1px solid #334155;
+    }
+    .verify-count-grid { display: flex; gap: 10px; margin-bottom: 8px; }
+    .verify-count-card {
+      flex: 1; background: #1e293b; border-radius: 8px;
+      padding: 10px; text-align: center;
+    }
+    .verify-count-card .vc-label { font-size: 11px; color: #64748b; margin-bottom: 4px; }
+    .verify-count-card .vc-num   { font-size: 22px; font-weight: 700; line-height: 1; }
+    .verify-count-card .vc-sub   { font-size: 11px; color: #64748b; margin-top: 2px; }
+    .verify-suggest {
+      font-size: 12px; color: #fbbf24; margin-top: 6px;
+      background: rgba(251,191,36,0.07); border-radius: 6px; padding: 8px 10px;
+    }
+    .verify-suggest button {
+      margin-left: 8px; background: #1d4ed8; color: #bfdbfe;
+      border: none; border-radius: 5px; padding: 3px 10px;
+      font-size: 11px; cursor: pointer;
+    }
+    .vr-table td.verify-ok   { color: #22c55e; font-weight: 700; }
+    .vr-table td.verify-miss { color: #334155; }
+    .vr-table td.verify-order-text { color: #94a3b8; font-size: 12px; }
+    .verify-unmatched-title {
+      font-size: 13px; font-weight: 700; color: #f59e0b;
+      padding: 14px 14px 4px;
+    }
+
     /* ── Utility ── */
     .err    { color: #ef4444; font-size: 13px; margin-top: 10px; text-align: center; }
     .hidden { display: none !important; }
@@ -472,6 +511,20 @@
     <div id="sellContent"><div class="table-empty">현재가 로딩 후 표시됩니다</div></div>
   </div>
 
+  <!-- ══ Tab: 검증 ══ -->
+  <div id="tabVerify" class="page-content hidden">
+    <div class="paste-wrap">
+      <div class="paste-label">예약주문 엑셀 붙여넣기</div>
+      <textarea id="inp_verifyText" class="paste-area" rows="6"
+        placeholder="HTS 예약주문 조회 화면에서 전체 선택 → 복사 → 여기에 붙여넣기
+
+예약번호  예약일자  예약구분  주문시간  종목코드  종목명  매매구분  예약수량  예약가격 ...
+52028   20260413  기간잔량  장개시   TQQQ   PROSHARES QQQ 3X  매수  5  42.32 ..."></textarea>
+      <button class="parse-btn" onclick="parseAndVerify()">검증하기</button>
+    </div>
+    <div id="verifyResult"></div>
+  </div>
+
   <!-- ══ Tab: 히스토리 ══ -->
   <div id="tabHistory" class="page-content hidden">
 
@@ -552,6 +605,9 @@
     </div>
     <div class="tab-item" id="tab-sell" onclick="switchTab('sell')">
       <span class="tab-icon">&#9650;</span>매도
+    </div>
+    <div class="tab-item" id="tab-verify" onclick="switchTab('verify')">
+      <span class="tab-icon">&#10003;</span>검증
     </div>
     <div class="tab-item" id="tab-history" onclick="switchTab('history')">
       <span class="tab-icon">&#128203;</span>히스토리
@@ -947,16 +1003,27 @@ function calcSellTable(price, shares, vhigh, base) {
 /* ============================================================
    Table renderers
    ============================================================ */
+let depositExpanded = true;
+
+function toggleDeposit() {
+  depositExpanded = !depositExpanded;
+  calculateAndRender();
+}
+
 function renderBuyTable(price, shares, vlow, pool, unit) {
   const el = document.getElementById('buyContent');
   if (!price) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
 
   const rows = runBuySimulation(price, shares, vlow, pool, unit);
   const floor = price * 0.80, lim = pool * 0.75;
+  const depBtnLabel = depositExpanded ? '예수금 접기 ▲' : '예수금 펼치기 ▼';
+  const depDisplay  = depositExpanded ? '' : 'display:none;';
 
   let html = `
-    <div class="tbl-title tbl-title-buy" style="justify-content:space-between;">▼ 매수 테이블
+    <div class="tbl-title tbl-title-buy" style="justify-content:space-between;">
+      <span>▼ 매수 테이블</span>
       <div style="display:flex; align-items:center; gap:6px;">
+        <button onclick="toggleDeposit()" style="background:#0f172a; border:1px solid #334155; color:#fbbf24; border-radius:6px; padding:4px 9px; font-size:10px; cursor:pointer; white-space:nowrap;">${depBtnLabel}</button>
         <button class="unit-adj-btn" onclick="adjustBuyUnit(-1)">−</button>
         <span style="font-size:13px; color:#94a3b8; min-width:36px; text-align:center;">${unit}주</span>
         <button class="unit-adj-btn" onclick="adjustBuyUnit(1)">+</button>
@@ -973,10 +1040,14 @@ function renderBuyTable(price, shares, vlow, pool, unit) {
     html += '<div class="table-empty">-20% 구간 내 매수 조건 없음<br><span class="c-muted">또는 Pool 75% 소진</span></div>';
   } else {
     html += `<table class="vr-table"><thead><tr><th>매수가</th><th>수량</th><th>누적</th><th>Pool 소진</th></tr></thead><tbody>`;
-    for (const r of rows) {
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
       const hit = r.price >= price;
       html += `<tr class="row-buy${hit ? ' row-triggered' : ''}">
         <td class="c-green">$${r.price.toFixed(2)}</td><td>${r.qty}주</td><td>${r.cumQty}주</td><td class="c-yellow">${fmt(r.poolUsed)}</td>
+      </tr>
+      <tr class="deposit-row" style="${depDisplay}">
+        <td colspan="4">↳ ${i + 1}줄까지 필요 예수금: <span class="dep-amt">${fmt(r.poolUsed)}</span></td>
       </tr>`;
     }
     html += '</tbody></table>';
@@ -1018,6 +1089,156 @@ function renderSellTable(price, shares, vhigh, unit) {
     html += '</tbody></table>';
   }
   el.innerHTML = html;
+}
+
+/* ============================================================
+   예약주문 검증 탭
+   ============================================================ */
+function parseExcelOrders(text) {
+  const lines = text.trim().split('\n');
+  const orders = [];
+  for (const line of lines) {
+    const cols = line.split('\t').map(s => s.trim());
+    // 매수/매도 열을 동적으로 찾아 바로 뒤 두 열을 수량·가격으로 읽음
+    const typeIdx = cols.findIndex(c => c === '매수' || c === '매도');
+    if (typeIdx === -1) continue;
+    const type  = cols[typeIdx];
+    const qty   = parseInt((cols[typeIdx + 1] || '').replace(/,/g, ''));
+    const price = parseFloat((cols[typeIdx + 2] || '').replace(/,/g, ''));
+    if (isNaN(qty) || isNaN(price) || qty <= 0 || price <= 0) continue;
+    orders.push({ type, qty, price });
+  }
+  return orders;
+}
+
+function applyVerifyUnit(qty) {
+  buyUnit = qty;
+  calculateAndRender();
+  parseAndVerify();
+}
+
+function parseAndVerify() {
+  const resultEl = document.getElementById('verifyResult');
+  const text = document.getElementById('inp_verifyText').value;
+  const orders = parseExcelOrders(text);
+
+  if (!text.trim()) { resultEl.innerHTML = ''; return; }
+  if (!orders.length) {
+    resultEl.innerHTML = '<div class="parse-error">파싱된 주문이 없습니다.<br>엑셀 예약주문 화면에서 복사한 데이터를 붙여넣어 주세요.</div>';
+    return;
+  }
+  if (!currentPrice) {
+    resultEl.innerHTML = '<div class="parse-error">현재가를 먼저 입력해주세요.</div>';
+    return;
+  }
+
+  const shares  = loadNum(KEYS.shares);
+  const pool    = loadNum(KEYS.pool);
+  const unitQty = loadNum(KEYS.unitQty) || 1;
+  const v2   = loadNum(KEYS.v2) || (loadNum(KEYS.v1) + pool / (loadNum(KEYS.g) || 10));
+  const vlow  = v2 * 0.85;
+  const vhigh = v2 * 1.15;
+
+  const effectiveBuyUnit  = buyUnit  !== null ? buyUnit  : unitQty;
+  const effectiveSellUnit = sellUnit !== null ? sellUnit : unitQty;
+
+  const buyRows  = runBuySimulation(currentPrice, shares, vlow, pool, effectiveBuyUnit);
+  const sellRows = runSellSimulation(currentPrice, shares, vhigh, effectiveSellUnit);
+
+  const buyOrders  = orders.filter(o => o.type === '매수');
+  const sellOrders = orders.filter(o => o.type === '매도');
+
+  // 가격 매칭: 소수점 2자리까지만 비교
+  function matchRow(simRow, orderList) {
+    return orderList.find(o =>
+      o.price.toFixed(2) === simRow.price.toFixed(2) &&
+      o.qty === simRow.qty
+    ) || null;
+  }
+
+  const buyMatched  = buyRows.filter(r  => matchRow(r,  buyOrders)).length;
+  const sellMatched = sellRows.filter(r => matchRow(r, sellOrders)).length;
+
+  // 단위수량 불일치 감지
+  const detectedBuyUnit = buyOrders.length ? Math.min(...buyOrders.map(o => o.qty)) : null;
+  const showUnitSuggest = detectedBuyUnit !== null && detectedBuyUnit !== effectiveBuyUnit;
+
+  // ── 요약 박스 ──
+  let html = `<div class="verify-summary-box">
+    <div style="font-size:12px; color:#64748b; text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:10px;">검증 요약</div>
+    <div class="verify-count-grid">
+      <div class="verify-count-card">
+        <div class="vc-label">매수</div>
+        <div class="vc-num" style="color:${buyMatched === buyRows.length ? '#22c55e' : '#fbbf24'};">${buyMatched}/${buyRows.length}</div>
+        <div class="vc-sub">완료</div>
+      </div>
+      <div class="verify-count-card">
+        <div class="vc-label">매도</div>
+        <div class="vc-num" style="color:${sellMatched === sellRows.length ? '#22c55e' : '#fbbf24'};">${sellMatched}/${sellRows.length}</div>
+        <div class="vc-sub">완료</div>
+      </div>
+    </div>`;
+  if (showUnitSuggest) {
+    html += `<div class="verify-suggest">단위수량 ${effectiveBuyUnit}주로 계산 중 — 예약주문에서 ${detectedBuyUnit}주 단위 감지
+      <button onclick="applyVerifyUnit(${detectedBuyUnit})">${detectedBuyUnit}주로 변경</button>
+    </div>`;
+  }
+  html += `</div>`;
+
+  // ── 매수 검증 테이블 ──
+  if (buyRows.length) {
+    html += `<div class="tbl-title tbl-title-buy" style="margin-top:4px;">▼ 매수 검증</div>
+    <table class="vr-table"><thead><tr><th>매수가</th><th>수량</th><th>예약주문</th><th></th></tr></thead><tbody>`;
+    for (const r of buyRows) {
+      const m = matchRow(r, buyOrders);
+      html += `<tr class="row-buy">
+        <td class="c-green">$${r.price.toFixed(2)}</td>
+        <td>${r.qty}주</td>
+        <td class="verify-order-text">${m ? `${m.qty}주 @ $${m.price.toFixed(2)}` : '—'}</td>
+        <td class="${m ? 'verify-ok' : 'verify-miss'}">${m ? '✓' : '—'}</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  // ── 매도 검증 테이블 ──
+  if (sellRows.length) {
+    html += `<div class="tbl-title tbl-title-sell" style="margin-top:4px;">▲ 매도 검증</div>
+    <table class="vr-table"><thead><tr><th>매도가</th><th>수량</th><th>예약주문</th><th></th></tr></thead><tbody>`;
+    for (const r of sellRows) {
+      const m = matchRow(r, sellOrders);
+      html += `<tr class="row-sell">
+        <td class="c-red">$${r.price.toFixed(2)}</td>
+        <td>${r.qty}주</td>
+        <td class="verify-order-text">${m ? `${m.qty}주 @ $${m.price.toFixed(2)}` : '—'}</td>
+        <td class="${m ? 'verify-ok' : 'verify-miss'}">${m ? '✓' : '—'}</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  // ── 테이블에 없는 예약주문 경고 ──
+  const simBuyKey  = new Set(buyRows.map(r => r.price.toFixed(2)));
+  const simSellKey = new Set(sellRows.map(r => r.price.toFixed(2)));
+  const unmatched  = orders.filter(o =>
+    o.type === '매수' ? !simBuyKey.has(o.price.toFixed(2))
+                      : !simSellKey.has(o.price.toFixed(2))
+  );
+  if (unmatched.length) {
+    html += `<div class="verify-unmatched-title">⚠ VR 테이블에 없는 예약주문</div>
+    <table class="vr-table"><thead><tr><th>구분</th><th>예약가격</th><th>수량</th></tr></thead><tbody>`;
+    for (const o of unmatched) {
+      html += `<tr>
+        <td style="color:${o.type === '매수' ? '#22c55e' : '#ef4444'}">${o.type}</td>
+        <td>$${o.price.toFixed(2)}</td>
+        <td>${o.qty}주</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  html += '<div style="height:24px;"></div>';
+  resultEl.innerHTML = html;
 }
 
 /* ============================================================
@@ -1433,7 +1654,7 @@ function rolloverCycle() {
 /* ============================================================
    Tab switching
    ============================================================ */
-const TAB_IDS = { main: 'tabMain', buy: 'tabBuy', sell: 'tabSell', history: 'tabHistory' };
+const TAB_IDS = { main: 'tabMain', buy: 'tabBuy', sell: 'tabSell', verify: 'tabVerify', history: 'tabHistory' };
 let activeTab = 'main';
 
 function switchTab(tab) {
