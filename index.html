@@ -513,6 +513,23 @@
 
   <!-- ══ Tab: 검증 ══ -->
   <div id="tabVerify" class="page-content hidden">
+    <div style="margin:12px 14px 0; background:#1e293b; border-radius:10px; padding:12px 14px; border:1px solid #334155;">
+      <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:10px;">단위수량</div>
+      <div style="display:flex; gap:20px;">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span style="font-size:12px; color:#22c55e; font-weight:600;">매수</span>
+          <button class="unit-adj-btn" onclick="adjustBuyUnitVerify(-1)">−</button>
+          <span id="verifyBuyUnitDisplay" style="font-size:13px; color:#94a3b8; min-width:36px; text-align:center;">1주</span>
+          <button class="unit-adj-btn" onclick="adjustBuyUnitVerify(1)">+</button>
+        </div>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span style="font-size:12px; color:#ef4444; font-weight:600;">매도</span>
+          <button class="unit-adj-btn" onclick="adjustSellUnitVerify(-1)">−</button>
+          <span id="verifySellUnitDisplay" style="font-size:13px; color:#94a3b8; min-width:36px; text-align:center;">1주</span>
+          <button class="unit-adj-btn" onclick="adjustSellUnitVerify(1)">+</button>
+        </div>
+      </div>
+    </div>
     <div class="paste-wrap">
       <div class="paste-label">예약주문 엑셀 붙여넣기</div>
       <textarea id="inp_verifyText" class="paste-area" rows="6"
@@ -912,11 +929,21 @@ function recalcV2() {
 
 function adjustBuyUnit(delta) {
   buyUnit = Math.max(1, (buyUnit !== null ? buyUnit : (loadNum(KEYS.unitQty) || 1)) + delta);
+  updateVerifyUnitDisplay();
   calculateAndRender();
 }
 function adjustSellUnit(delta) {
   sellUnit = Math.max(1, (sellUnit !== null ? sellUnit : (loadNum(KEYS.unitQty) || 1)) + delta);
+  updateVerifyUnitDisplay();
   calculateAndRender();
+}
+
+function updateVerifyUnitDisplay() {
+  const unitQty = loadNum(KEYS.unitQty) || 1;
+  const bd = document.getElementById('verifyBuyUnitDisplay');
+  const sd = document.getElementById('verifySellUnitDisplay');
+  if (bd) bd.textContent = `${buyUnit !== null ? buyUnit : unitQty}주`;
+  if (sd) sd.textContent = `${sellUnit !== null ? sellUnit : unitQty}주`;
 }
 
 function setUI(state) {
@@ -1117,13 +1144,19 @@ function applyVerifyUnit(qty) {
   parseAndVerify();
 }
 
-function adjustVerifyUnit(delta) {
+function adjustBuyUnitVerify(delta) {
   const unitQty = loadNum(KEYS.unitQty) || 1;
-  const cur = buyUnit !== null ? buyUnit : unitQty;
-  buyUnit  = Math.max(1, cur + delta);
-  sellUnit = buyUnit;
+  buyUnit = Math.max(1, (buyUnit !== null ? buyUnit : unitQty) + delta);
+  updateVerifyUnitDisplay();
   calculateAndRender();
-  parseAndVerify();
+  if (document.getElementById('verifyResult').innerHTML.trim()) parseAndVerify();
+}
+function adjustSellUnitVerify(delta) {
+  const unitQty = loadNum(KEYS.unitQty) || 1;
+  sellUnit = Math.max(1, (sellUnit !== null ? sellUnit : unitQty) + delta);
+  updateVerifyUnitDisplay();
+  calculateAndRender();
+  if (document.getElementById('verifyResult').innerHTML.trim()) parseAndVerify();
 }
 
 function parseAndVerify() {
@@ -1170,14 +1203,7 @@ function parseAndVerify() {
 
   // ── 요약 박스 ──
   let html = `<div class="verify-summary-box">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-      <div style="font-size:12px; color:#64748b; text-transform:uppercase; letter-spacing:.06em; font-weight:600;">검증 요약</div>
-      <div style="display:flex; align-items:center; gap:6px;">
-        <button class="unit-adj-btn" onclick="adjustVerifyUnit(-1)">−</button>
-        <span style="font-size:13px; color:#94a3b8; min-width:36px; text-align:center;">${effectiveBuyUnit}주</span>
-        <button class="unit-adj-btn" onclick="adjustVerifyUnit(1)">+</button>
-      </div>
-    </div>
+    <div style="font-size:12px; color:#64748b; text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:10px;">검증 요약</div>
     <div class="verify-count-grid">
       <div class="verify-count-card">
         <div class="vc-label">매수</div>
@@ -1671,6 +1697,7 @@ function switchTab(tab) {
     document.getElementById(`tab-${key}`).classList.toggle('active', key === tab);
   }
   if (tab === 'history') renderHistory();
+  if (tab === 'verify')  updateVerifyUnitDisplay();
 }
 
 /* ============================================================
