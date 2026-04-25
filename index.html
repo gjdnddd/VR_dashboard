@@ -1117,6 +1117,15 @@ function applyVerifyUnit(qty) {
   parseAndVerify();
 }
 
+function adjustVerifyUnit(delta) {
+  const unitQty = loadNum(KEYS.unitQty) || 1;
+  const cur = buyUnit !== null ? buyUnit : unitQty;
+  buyUnit  = Math.max(1, cur + delta);
+  sellUnit = buyUnit;
+  calculateAndRender();
+  parseAndVerify();
+}
+
 function parseAndVerify() {
   const resultEl = document.getElementById('verifyResult');
   const text = document.getElementById('inp_verifyText').value;
@@ -1159,13 +1168,16 @@ function parseAndVerify() {
   const buyMatched  = buyRows.filter(r  => matchRow(r,  buyOrders)).length;
   const sellMatched = sellRows.filter(r => matchRow(r, sellOrders)).length;
 
-  // 단위수량 불일치 감지
-  const detectedBuyUnit = buyOrders.length ? Math.min(...buyOrders.map(o => o.qty)) : null;
-  const showUnitSuggest = detectedBuyUnit !== null && detectedBuyUnit !== effectiveBuyUnit;
-
   // ── 요약 박스 ──
   let html = `<div class="verify-summary-box">
-    <div style="font-size:12px; color:#64748b; text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:10px;">검증 요약</div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <div style="font-size:12px; color:#64748b; text-transform:uppercase; letter-spacing:.06em; font-weight:600;">검증 요약</div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button class="unit-adj-btn" onclick="adjustVerifyUnit(-1)">−</button>
+        <span style="font-size:13px; color:#94a3b8; min-width:36px; text-align:center;">${effectiveBuyUnit}주</span>
+        <button class="unit-adj-btn" onclick="adjustVerifyUnit(1)">+</button>
+      </div>
+    </div>
     <div class="verify-count-grid">
       <div class="verify-count-card">
         <div class="vc-label">매수</div>
@@ -1177,13 +1189,8 @@ function parseAndVerify() {
         <div class="vc-num" style="color:${sellMatched === sellRows.length ? '#22c55e' : '#fbbf24'};">${sellMatched}/${sellRows.length}</div>
         <div class="vc-sub">완료</div>
       </div>
-    </div>`;
-  if (showUnitSuggest) {
-    html += `<div class="verify-suggest">단위수량 ${effectiveBuyUnit}주로 계산 중 — 예약주문에서 ${detectedBuyUnit}주 단위 감지
-      <button onclick="applyVerifyUnit(${detectedBuyUnit})">${detectedBuyUnit}주로 변경</button>
-    </div>`;
-  }
-  html += `</div>`;
+    </div>
+  </div>`;
 
   // ── 매수 검증 테이블 ──
   if (buyRows.length) {
