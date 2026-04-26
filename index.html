@@ -492,7 +492,7 @@
       <div class="hold-row"><span class="hold-label">G값</span><span class="hold-val" id="gDisplay">--</span></div>
       <div class="hold-row"><span class="hold-label">사이클 시작 주차</span><span class="hold-val" id="startWeekDisplay">--</span></div>
       <div class="hold-row"><span class="hold-label">테이블 단위 수량</span><span class="hold-val" id="unitQtyDisplay">--</span></div>
-      <button class="edit-settings-btn" onclick="openSettings()">&#9998; 설정 수정 (G값 · Pool · 단위수량)</button>
+      <button class="edit-settings-btn" onclick="openSettings()">&#9998; 설정 수정 (V1 · G값 · Pool · 단위수량)</button>
     </div>
 
     <div style="margin: 4px 14px 24px;">
@@ -637,6 +637,12 @@
 <div id="settingsModal" class="modal-overlay hidden" onclick="modalOverlayClick(event)">
   <div class="modal-sheet">
     <div class="modal-title">설정 수정</div>
+
+    <div class="form-group">
+      <label>V1 — 이전 사이클 기준값 (USD)</label>
+      <input type="number" id="edit_v1" inputmode="decimal" step="0.01" min="0">
+      <div class="modal-hint">변경 시 V2가 재계산됩니다</div>
+    </div>
 
     <div class="form-group">
       <label>G값 — 기울기</label>
@@ -1867,6 +1873,7 @@ function confirmReset() {
    Phase 5 — Settings modal
    ============================================================ */
 function openSettings() {
+  document.getElementById('edit_v1').value      = loadNum(KEYS.v1) || '';
   document.getElementById('edit_g').value       = loadNum(KEYS.g) || 10;
   document.getElementById('edit_pool').value    = loadNum(KEYS.pool);
   document.getElementById('edit_unitQty').value = loadNum(KEYS.unitQty) || 1;
@@ -1885,19 +1892,29 @@ function modalOverlayClick(e) {
 }
 
 function saveSettings() {
+  const v1      = parseFloat(document.getElementById('edit_v1').value);
   const g       = parseFloat(document.getElementById('edit_g').value);
   const pool    = parseFloat(document.getElementById('edit_pool').value);
   const unitQty = parseInt(document.getElementById('edit_unitQty').value);
 
+  if (isNaN(v1) || v1 <= 0)   { alert('V1 값을 올바르게 입력하세요.');   return; }
   if (!g || g <= 0)           { alert('G값을 올바르게 입력하세요.');   return; }
   if (isNaN(pool) || pool < 0){ alert('Pool 값을 올바르게 입력하세요.'); return; }
   if (!unitQty || unitQty < 1){ alert('단위 수량은 1 이상이어야 합니다.'); return; }
 
+  const v1Changed   = v1   !== loadNum(KEYS.v1);
   const poolChanged = pool !== loadNum(KEYS.pool);
 
-  save(KEYS.g,       g);
-  save(KEYS.pool,    pool);
+  save(KEYS.v1,     v1);
+  save(KEYS.g,      g);
+  save(KEYS.pool,   pool);
   save(KEYS.unitQty, unitQty);
+
+  // V1 변경 시 V2 캐시 초기화 → 다음 렌더에서 새 V1으로 재계산
+  if (v1Changed) {
+    localStorage.removeItem(KEYS.v2);
+    localStorage.removeItem(KEYS.v2ForCycle);
+  }
 
   // Pool 변경 시 사이클 기준도 동기화
   if (poolChanged) save(KEYS.cycleStartPool, pool);
