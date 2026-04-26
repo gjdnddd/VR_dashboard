@@ -1039,7 +1039,7 @@ function toggleDeposit() {
 
 function renderBuyTable(price, shares, vlow, pool, unit) {
   const el = document.getElementById('buyContent');
-  if (!price) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
+  if (!price || vlow === null) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
 
   const rows = runBuySimulation(price, shares, vlow, pool, unit);
   const floor = price * 0.80, lim = pool * 0.75;
@@ -1084,7 +1084,7 @@ function renderBuyTable(price, shares, vlow, pool, unit) {
 
 function renderSellTable(price, shares, vhigh, unit) {
   const el = document.getElementById('sellContent');
-  if (!price) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
+  if (!price || vhigh === null) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
 
   const rows = runSellSimulation(price, shares, vhigh, unit);
   const ceil = price * 1.20;
@@ -1678,9 +1678,11 @@ function rolloverCycle() {
 
   save(KEYS.v1,               v2);
   save(KEYS.cycleStartPool,   pool);
-  save(KEYS.lastRolloverWeek, cycleInfo.cycleWeek); // 완료 플래그 저장
+  save(KEYS.lastRolloverWeek, cycleInfo.cycleWeek);
+  localStorage.removeItem(KEYS.v2ForCycle); // 신규 V2 재계산 허용
+  localStorage.removeItem(KEYS.v2);
 
-  autoGistPush(); // 롤오버 시 자동 동기화
+  autoGistPush();
   calculateAndRender();
 }
 
@@ -1704,7 +1706,7 @@ function switchTab(tab) {
    Core calculation & render
    ============================================================ */
 function calculateAndRender() {
-  const v1        = loadNum(KEYS.v1);
+  let v1          = loadNum(KEYS.v1);
   const shares    = loadNum(KEYS.shares);
   const pool      = loadNum(KEYS.pool);
   const g         = loadNum(KEYS.g) || 10;
@@ -1716,7 +1718,25 @@ function calculateAndRender() {
   // V2: 사이클 시작 시 현재가가 처음 들어오는 순간 1회 계산 후 고정
   const _ci          = getCycleInfo(startWeek);
   const _curWeek     = _ci ? _ci.cycleWeek : 0;
-  const _v2ForCycle  = parseInt(load(KEYS.v2ForCycle) ?? '-99');
+  let _v2ForCycle    = parseInt(load(KEYS.v2ForCycle) ?? '-99');
+
+  // 자동 롤오버: 사이클 종료 시 저장된 V2 → 신규 V1 (현재가 불필요, 1회만)
+  const _lastRoll  = parseInt(load(KEYS.lastRolloverWeek) ?? '-1');
+  const _setupAt   = parseInt(load(KEYS.setupAt) || '0');
+  const _preSetup  = _ci && _ci.endMs !== undefined && _ci.endMs <= _setupAt;
+  if (_ci && _ci.isEnded && _lastRoll !== _curWeek && !_preSetup) {
+    const _oldV2 = loadNum(KEYS.v2);
+    if (_oldV2 > 0) {
+      save(KEYS.v1, _oldV2);
+      save(KEYS.lastRolloverWeek, _curWeek);
+      localStorage.removeItem(KEYS.v2ForCycle);
+      localStorage.removeItem(KEYS.v2);
+      v1 = _oldV2;
+      _v2ForCycle = -99;
+      autoGistPush();
+    }
+  }
+
   let v2;
   if (currentPrice !== null && _v2ForCycle !== _curWeek) {
     v2 = v1 + pool / g + (currentPrice * shares - v1) / (2 * Math.sqrt(g));
@@ -1725,10 +1745,10 @@ function calculateAndRender() {
   } else if (_v2ForCycle === _curWeek) {
     v2 = loadNum(KEYS.v2);
   } else {
-    v2 = v1 + pool / g; // 현재가 미입력 시 fallback
+    v2 = null; // 현재가 미입력 + 저장값 없음 → V2 미계산
   }
-  const vlow  = v2 * 0.85;
-  const vhigh = v2 * 1.15;
+  const vlow  = v2 !== null ? v2 * 0.85 : null;
+  const vhigh = v2 !== null ? v2 * 1.15 : null;
 
   // ── Static values ──
   document.getElementById('v1Display').textContent        = fmt(v1);
@@ -1744,9 +1764,11 @@ function calculateAndRender() {
   const evalEl = document.getElementById('evalAmount'), statusEl = document.getElementById('evalStatus');
   if (eval_ !== null) {
     evalEl.textContent = fmt(eval_);
-    if      (eval_ < vlow)  { evalEl.className = 'metric-value c-green'; statusEl.textContent = '매수 구간'; statusEl.className = 'badge badge-buy'; }
-    else if (eval_ > vhigh) { evalEl.className = 'metric-value c-red';   statusEl.textContent = '매도 구간'; statusEl.className = 'badge badge-sell'; }
-    else                    { evalEl.className = 'metric-value c-blue';   statusEl.textContent = '밴드 내';   statusEl.className = 'badge badge-band'; }
+    if (vlow === null || vhigh === null) {
+      evalEl.className = 'metric-value'; statusEl.textContent = 'V2 미계산'; statusEl.className = 'badge badge-none';
+    } else if (eval_ < vlow)  { evalEl.className = 'metric-value c-green'; statusEl.textContent = '매수 구간'; statusEl.className = 'badge badge-buy'; }
+    else if   (eval_ > vhigh) { evalEl.className = 'metric-value c-red';   statusEl.textContent = '매도 구간'; statusEl.className = 'badge badge-sell'; }
+    else                      { evalEl.className = 'metric-value c-blue';   statusEl.textContent = '밴드 내';   statusEl.className = 'badge badge-band'; }
   } else {
     evalEl.textContent = '--'; evalEl.className = 'metric-value';
     statusEl.textContent = '가격 미입력'; statusEl.className = 'badge badge-none';
@@ -1799,7 +1821,7 @@ function calculateAndRender() {
     if (c.isEnded && !alreadyDone && !cycleEndedBeforeSetup) {
       // 마감 + 미완료 → 실행 배너
       document.getElementById('rolloverSubText').textContent =
-        `V2 (${fmtAmt(v2)}) → ${c.cycleWeek + 2}주차 V1으로 설정`;
+        `V2 (${fmt(v2)}) → ${c.cycleWeek + 2}주차 V1으로 설정`;
       banner.classList.remove('hidden');
       doneBox.classList.add('hidden');
     } else if (c.isEnded && alreadyDone) {
