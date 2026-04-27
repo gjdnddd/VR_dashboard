@@ -253,6 +253,9 @@
       width: 100%;
       border-top: 1px solid #334155;
       animation: slideUp .2s ease;
+      max-height: 90vh;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
     @keyframes slideUp {
       from { transform: translateY(40px); opacity: 0; }
@@ -654,12 +657,6 @@
       <label>Pool — 현재 보유 현금 (USD)</label>
       <input type="number" id="edit_pool" inputmode="decimal" step="0.01" min="0">
       <div class="modal-hint">변경 시 이번 사이클 Pool 기준도 함께 갱신됩니다</div>
-    </div>
-
-    <div class="form-group">
-      <label>테이블 단위 수량 (주)</label>
-      <input type="number" id="edit_unitQty" inputmode="numeric" step="1" min="1">
-      <div class="modal-hint">매수/매도 탭에서 ± 버튼으로 즉시 조정 가능</div>
     </div>
 
     <button class="btn" onclick="saveSettings()">저장</button>
@@ -1876,7 +1873,6 @@ function openSettings() {
   document.getElementById('edit_v1').value      = loadNum(KEYS.v1) || '';
   document.getElementById('edit_g').value       = loadNum(KEYS.g) || 10;
   document.getElementById('edit_pool').value    = loadNum(KEYS.pool);
-  document.getElementById('edit_unitQty').value = loadNum(KEYS.unitQty) || 1;
   document.getElementById('edit_pat').value     = load(KEYS.githubPat) || '';
   document.getElementById('edit_gistId').value  = load(KEYS.gistId) || '';
   document.getElementById('syncStatus').textContent = '';
@@ -1895,33 +1891,24 @@ function saveSettings() {
   const v1      = parseFloat(document.getElementById('edit_v1').value);
   const g       = parseFloat(document.getElementById('edit_g').value);
   const pool    = parseFloat(document.getElementById('edit_pool').value);
-  const unitQty = parseInt(document.getElementById('edit_unitQty').value);
-
   if (isNaN(v1) || v1 <= 0)   { alert('V1 값을 올바르게 입력하세요.');   return; }
   if (!g || g <= 0)           { alert('G값을 올바르게 입력하세요.');   return; }
   if (isNaN(pool) || pool < 0){ alert('Pool 값을 올바르게 입력하세요.'); return; }
-  if (!unitQty || unitQty < 1){ alert('단위 수량은 1 이상이어야 합니다.'); return; }
 
   const v1Changed   = v1   !== loadNum(KEYS.v1);
   const poolChanged = pool !== loadNum(KEYS.pool);
 
-  save(KEYS.v1,     v1);
-  save(KEYS.g,      g);
-  save(KEYS.pool,   pool);
-  save(KEYS.unitQty, unitQty);
+  save(KEYS.v1,   v1);
+  save(KEYS.g,    g);
+  save(KEYS.pool, pool);
 
-  // V1 변경 시 V2 캐시 초기화 → 다음 렌더에서 새 V1으로 재계산
   if (v1Changed) {
     localStorage.removeItem(KEYS.v2);
     localStorage.removeItem(KEYS.v2ForCycle);
   }
 
-  // Pool 변경 시 사이클 기준도 동기화
   if (poolChanged) save(KEYS.cycleStartPool, pool);
 
-  // 단위수량 변경 시 테이블 단위 초기화
-  buyUnit  = null;
-  sellUnit = null;
   closeSettings();
   calculateAndRender();
 }
