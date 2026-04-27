@@ -367,6 +367,11 @@
       <input type="number" id="inp_pool" placeholder="예: 3000" inputmode="decimal" step="0.01">
     </div>
     <div class="form-group">
+      <label>시드 — 총 투자 원금 (USD) <span style="color:#ef4444">*</span></label>
+      <input type="number" id="inp_seed" placeholder="예: 65000" inputmode="decimal" step="0.01">
+      <div class="hint">입금/출금 발생 시 설정에서 조정 가능</div>
+    </div>
+    <div class="form-group">
       <label>G값 — 기울기</label>
       <input type="number" id="inp_g" placeholder="기본값: 10" value="10" inputmode="decimal" step="0.1">
       <div class="hint">클수록 보수적. 기본값 10 권장</div>
@@ -444,6 +449,16 @@
           <div class="metric-value c-red" id="vhighValue">--</div>
         </div>
       </div>
+      <div style="display:flex; gap:10px; margin-top:10px;">
+        <div class="metric-item" style="flex:1;">
+          <div class="metric-label">총자산 (평가금+Pool)</div>
+          <div class="metric-value" id="totalAsset">--</div>
+        </div>
+        <div class="metric-item" style="flex:1;">
+          <div class="metric-label">수익률</div>
+          <div class="metric-value" id="returnRate">--</div>
+        </div>
+      </div>
     </div>
 
     <!-- 사이클 관리 -->
@@ -495,7 +510,7 @@
       <div class="hold-row"><span class="hold-label">G값</span><span class="hold-val" id="gDisplay">--</span></div>
       <div class="hold-row"><span class="hold-label">사이클 시작 주차</span><span class="hold-val" id="startWeekDisplay">--</span></div>
       <div class="hold-row"><span class="hold-label">테이블 단위 수량</span><span class="hold-val" id="unitQtyDisplay">--</span></div>
-      <button class="edit-settings-btn" onclick="openSettings()">&#9998; 설정 수정 (V1 · G값 · Pool · 단위수량)</button>
+      <button class="edit-settings-btn" onclick="openSettings()">&#9998; 설정 수정 (V1 · G값 · Pool · 시드)</button>
     </div>
 
     <div style="margin: 4px 14px 24px;">
@@ -659,6 +674,24 @@
       <div class="modal-hint">변경 시 이번 사이클 Pool 기준도 함께 갱신됩니다</div>
     </div>
 
+    <div class="form-group">
+      <label>시드 — 총 투자 원금 (USD)</label>
+      <input type="number" id="edit_seed" inputmode="decimal" step="0.01" min="0">
+      <div style="display:flex; gap:6px; margin-top:8px;">
+        <input type="number" id="adj_amount" inputmode="decimal" step="0.01" min="0"
+               placeholder="조정 금액"
+               style="flex:1; background:#0f172a; border:1px solid #334155; border-radius:8px;
+                      padding:9px 10px; color:#f1f5f9; font-size:14px; outline:none;">
+        <button onclick="adjustSeed(1)"
+                style="background:#15803d; color:#bbf7d0; border:none; border-radius:8px;
+                       padding:9px 12px; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;">+ 입금</button>
+        <button onclick="adjustSeed(-1)"
+                style="background:#b91c1c; color:#fecaca; border:none; border-radius:8px;
+                       padding:9px 12px; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;">- 출금</button>
+      </div>
+      <div class="modal-hint">입금/출금 시 금액 입력 후 버튼 클릭 — 시드가 즉시 반영됩니다</div>
+    </div>
+
     <button class="btn" onclick="saveSettings()">저장</button>
     <button class="btn btn-danger" style="margin-top:8px;" onclick="closeSettings()">취소</button>
 
@@ -703,19 +736,20 @@ const KEYS = {
   g:                'vr_g',
   startWeek:        'vr_start_week',
   unitQty:          'vr_unit_qty',
+  seed:             'vr_seed',
   trades:           'vr_trades',
   cycleStartPool:   'vr_cycle_start_pool',
-  lastRolloverWeek: 'vr_last_rollover_week', // 중복 롤오버 방지
-  setupAt:          'vr_setup_at',           // 초기 입력 시각 (ms) — 이전 사이클 배너 차단용
-  githubPat:        'vr_github_pat',         // GitHub Personal Access Token (로컬 전용)
-  gistId:           'vr_gist_id',            // 생성된 Gist ID (로컬 전용)
-  v2:               'vr_v2',                 // 사이클 시작 시 고정된 V2
-  v2ForCycle:       'vr_v2_for_cycle',       // v2가 계산된 사이클 주차 (재계산 방지)
+  lastRolloverWeek: 'vr_last_rollover_week',
+  setupAt:          'vr_setup_at',
+  githubPat:        'vr_github_pat',
+  gistId:           'vr_gist_id',
+  v2:               'vr_v2',
+  v2ForCycle:       'vr_v2_for_cycle',
 };
 
 // 클라우드 동기화 대상 키 (PAT·GistID는 제외 — 기기마다 따로 관리)
 const SYNC_KEYS = ['vr_v1','vr_shares','vr_pool','vr_g','vr_start_week',
-                   'vr_unit_qty','vr_trades','vr_cycle_start_pool','vr_last_rollover_week',
+                   'vr_unit_qty','vr_seed','vr_trades','vr_cycle_start_pool','vr_last_rollover_week',
                    'vr_v2','vr_v2_for_cycle'];
 
 const save    = (k, v) => localStorage.setItem(k, String(v));
@@ -742,6 +776,7 @@ function saveSetup() {
   const v1        = parseFloat(document.getElementById('inp_v1').value);
   const shares    = parseFloat(document.getElementById('inp_shares').value);
   const pool      = parseFloat(document.getElementById('inp_pool').value);
+  const seed      = parseFloat(document.getElementById('inp_seed').value);
   const g         = parseFloat(document.getElementById('inp_g').value) || 10;
   const startWeek = document.getElementById('inp_startWeek').value.trim();
   const unitQty   = parseInt(document.getElementById('inp_unitQty').value) || 1;
@@ -750,6 +785,7 @@ function saveSetup() {
   if (!v1    || v1 <= 0)       { errEl.textContent = 'V1 값을 입력하세요.';      return; }
   if (!shares || shares <= 0)  { errEl.textContent = '보유 주식수를 입력하세요.'; return; }
   if (isNaN(pool) || pool < 0) { errEl.textContent = 'Pool 값을 입력하세요.';    return; }
+  if (!seed  || seed <= 0)     { errEl.textContent = '시드 값을 입력하세요.';    return; }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startWeek) || isNaN(Date.parse(startWeek))) {
     errEl.textContent = '날짜 형식이 올바르지 않습니다 (예: 2025-01-13)';
     return;
@@ -759,6 +795,7 @@ function saveSetup() {
   save(KEYS.v1,             v1);
   save(KEYS.shares,         shares);
   save(KEYS.pool,           pool);
+  save(KEYS.seed,           seed);
   save(KEYS.g,              g);
   save(KEYS.startWeek,      startWeek);
   save(KEYS.unitQty,        unitQty);
@@ -1517,6 +1554,10 @@ function renderHistory() {
           <div class="legend-item"><div class="legend-dot" style="background:#ef4444; border-radius:2px;"></div>Vhigh</div>
         </div>
         <canvas id="evalChart" style="width:100%; height:200px; border-radius:8px; background:#0f172a; display:block;"></canvas>
+      </div>
+      <div class="chart-wrap" style="margin-top:12px;">
+        <div class="chart-label">수익률 추이 (%)</div>
+        <canvas id="rateChart" style="width:100%; height:160px; border-radius:8px; background:#0f172a; display:block;"></canvas>
       </div>`;
   }
 
@@ -1556,7 +1597,10 @@ function renderHistory() {
   cont.innerHTML = html;
 
   if (trades.length > 0) {
-    requestAnimationFrame(() => drawEvalChart(trades));
+    requestAnimationFrame(() => {
+      drawEvalChart(trades);
+      drawRateChart(trades);
+    });
   }
 }
 
@@ -1649,6 +1693,85 @@ function drawEvalChart(trades) {
     if (i % step === 0 || i === pts.length - 1) {
       ctx.fillText(p.date, tx(i), H - P.bottom + 5);
     }
+  });
+}
+
+/* ============================================================
+   Rate chart
+   ============================================================ */
+function drawRateChart(trades) {
+  const canvas = document.getElementById('rateChart');
+  if (!canvas) return;
+  const seed = loadNum(KEYS.seed);
+  if (!seed) return;
+
+  const dpr  = window.devicePixelRatio || 1;
+  const rect  = canvas.getBoundingClientRect();
+  canvas.width  = rect.width  * dpr;
+  canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const W = rect.width, H = rect.height;
+  const P = { top: 12, right: 12, bottom: 28, left: 48 };
+  const pw = W - P.left - P.right;
+  const ph = H - P.top  - P.bottom;
+
+  const pts = trades.map((t, i) => ({
+    i,
+    rate: (t.evalSnap + t.poolAfter - seed) / seed * 100,
+    date: t.date,
+    type: t.type,
+  }));
+
+  const rates = pts.map(p => p.rate);
+  const minY  = Math.min(...rates, 0) - 2;
+  const maxY  = Math.max(...rates, 0) + 2;
+  const rng   = maxY - minY || 1;
+
+  const tx = i => P.left + (pts.length <= 1 ? pw / 2 : i / (pts.length - 1) * pw);
+  const ty = v => P.top  + ph - (v - minY) / rng * ph;
+
+  // 0% 기준선
+  ctx.beginPath(); ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = 'rgba(148,163,184,0.3)'; ctx.lineWidth = 1;
+  ctx.moveTo(P.left, ty(0)); ctx.lineTo(P.left + pw, ty(0));
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // 수익률 라인
+  ctx.beginPath(); ctx.lineWidth = 2;
+  pts.forEach((p, i) => {
+    ctx.strokeStyle = p.rate >= 0 ? '#22c55e' : '#ef4444';
+    if (i === 0) { ctx.moveTo(tx(i), ty(p.rate)); return; }
+    ctx.lineTo(tx(i), ty(p.rate));
+    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(tx(i), ty(p.rate));
+  });
+
+  // 점
+  pts.forEach(p => {
+    ctx.beginPath();
+    ctx.arc(tx(p.i), ty(p.rate), 4, 0, Math.PI * 2);
+    ctx.fillStyle   = p.type === '매수' ? '#22c55e' : '#ef4444';
+    ctx.fill();
+    ctx.strokeStyle = '#0f172a'; ctx.lineWidth = 1.5;
+    ctx.stroke();
+  });
+
+  // Y축 레이블
+  ctx.fillStyle = '#475569'; ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (let i = 0; i <= 4; i++) {
+    const v = minY + rng * i / 4;
+    ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(1) + '%', P.left - 4, ty(v));
+  }
+
+  // X축 날짜
+  ctx.fillStyle = '#475569'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const step = Math.max(1, Math.ceil(pts.length / 5));
+  pts.forEach((p, i) => {
+    if (i % step === 0 || i === pts.length - 1)
+      ctx.fillText(p.date, tx(i), H - P.bottom + 5);
   });
 }
 
@@ -1777,6 +1900,20 @@ function calculateAndRender() {
     statusEl.textContent = '가격 미입력'; statusEl.className = 'badge badge-none';
   }
 
+  // ── 총자산 & 수익률 ──
+  const seed       = loadNum(KEYS.seed);
+  const totalAsset = eval_ !== null ? eval_ + pool : null;
+  const retRate    = (seed > 0 && totalAsset !== null) ? (totalAsset - seed) / seed * 100 : null;
+  const totalEl    = document.getElementById('totalAsset');
+  const rateEl     = document.getElementById('returnRate');
+  totalEl.textContent = totalAsset !== null ? fmt(totalAsset) : '--';
+  if (retRate !== null) {
+    rateEl.textContent  = (retRate >= 0 ? '+' : '') + retRate.toFixed(2) + '%';
+    rateEl.className    = 'metric-value ' + (retRate >= 0 ? 'c-green' : 'c-red');
+  } else {
+    rateEl.textContent = '--'; rateEl.className = 'metric-value';
+  }
+
   // ── Pool bar (cycle buy usage) ──
   const trades = loadTrades();
   const cycleInfo = getCycleInfo(startWeek);
@@ -1873,10 +2010,20 @@ function openSettings() {
   document.getElementById('edit_v1').value      = loadNum(KEYS.v1) || '';
   document.getElementById('edit_g').value       = loadNum(KEYS.g) || 10;
   document.getElementById('edit_pool').value    = loadNum(KEYS.pool);
+  document.getElementById('edit_seed').value    = loadNum(KEYS.seed) || '';
+  document.getElementById('adj_amount').value   = '';
   document.getElementById('edit_pat').value     = load(KEYS.githubPat) || '';
   document.getElementById('edit_gistId').value  = load(KEYS.gistId) || '';
   document.getElementById('syncStatus').textContent = '';
   document.getElementById('settingsModal').classList.remove('hidden');
+}
+
+function adjustSeed(sign) {
+  const adj = parseFloat(document.getElementById('adj_amount').value);
+  if (isNaN(adj) || adj <= 0) { alert('조정 금액을 입력하세요.'); return; }
+  const current = parseFloat(document.getElementById('edit_seed').value) || loadNum(KEYS.seed) || 0;
+  document.getElementById('edit_seed').value = Math.max(0, current + sign * adj).toFixed(2);
+  document.getElementById('adj_amount').value = '';
 }
 
 function closeSettings() {
@@ -1891,9 +2038,12 @@ function saveSettings() {
   const v1      = parseFloat(document.getElementById('edit_v1').value);
   const g       = parseFloat(document.getElementById('edit_g').value);
   const pool    = parseFloat(document.getElementById('edit_pool').value);
-  if (isNaN(v1) || v1 <= 0)   { alert('V1 값을 올바르게 입력하세요.');   return; }
-  if (!g || g <= 0)           { alert('G값을 올바르게 입력하세요.');   return; }
-  if (isNaN(pool) || pool < 0){ alert('Pool 값을 올바르게 입력하세요.'); return; }
+  const seed = parseFloat(document.getElementById('edit_seed').value);
+
+  if (isNaN(v1) || v1 <= 0)    { alert('V1 값을 올바르게 입력하세요.');   return; }
+  if (!g || g <= 0)             { alert('G값을 올바르게 입력하세요.');   return; }
+  if (isNaN(pool) || pool < 0)  { alert('Pool 값을 올바르게 입력하세요.'); return; }
+  if (!seed || seed <= 0)       { alert('시드 값을 올바르게 입력하세요.'); return; }
 
   const v1Changed   = v1   !== loadNum(KEYS.v1);
   const poolChanged = pool !== loadNum(KEYS.pool);
@@ -1901,6 +2051,7 @@ function saveSettings() {
   save(KEYS.v1,   v1);
   save(KEYS.g,    g);
   save(KEYS.pool, pool);
+  save(KEYS.seed, seed);
 
   if (v1Changed) {
     localStorage.removeItem(KEYS.v2);
