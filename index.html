@@ -449,12 +449,15 @@
           <div class="metric-value c-red" id="vhighValue">--</div>
         </div>
       </div>
-      <div style="display:flex; gap:10px; margin-top:10px;">
-        <div class="metric-item" style="flex:1;">
+      <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+        <div class="metric-item">
           <div class="metric-label">총자산 (평가금+Pool)</div>
-          <div class="metric-value" id="totalAsset">--</div>
+          <div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
+            <div class="metric-value" id="totalAsset">--</div>
+            <div id="seedDisplay" style="font-size:12px; color:#64748b;"></div>
+          </div>
         </div>
-        <div class="metric-item" style="flex:1;">
+        <div class="metric-item">
           <div class="metric-label">수익률</div>
           <div class="metric-value" id="returnRate">--</div>
         </div>
@@ -1724,11 +1727,17 @@ function drawRateChart(trades) {
   const tx = i => P.left + (pts.length <= 1 ? pw / 2 : i / (pts.length - 1) * pw);
   const ty = v => P.top  + ph - (v - minY) / rng * ph;
 
-  // 0% 기준선
-  ctx.beginPath(); ctx.setLineDash([3, 3]);
-  ctx.strokeStyle = 'rgba(148,163,184,0.3)'; ctx.lineWidth = 1;
-  ctx.moveTo(P.left, ty(0)); ctx.lineTo(P.left + pw, ty(0));
-  ctx.stroke(); ctx.setLineDash([]);
+  // 가로 그리드
+  ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const v = minY + rng * i / 4;
+    const is0 = Math.abs(v) < rng * 0.01;
+    ctx.strokeStyle = is0 ? 'rgba(148,163,184,0.35)' : 'rgba(148,163,184,0.12)';
+    ctx.beginPath();
+    ctx.moveTo(P.left, ty(v)); ctx.lineTo(P.left + pw, ty(v));
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
 
   // 수익률 라인
   ctx.beginPath(); ctx.lineWidth = 2;
@@ -1899,6 +1908,7 @@ function calculateAndRender() {
   const totalEl    = document.getElementById('totalAsset');
   const rateEl     = document.getElementById('returnRate');
   totalEl.textContent = totalAsset !== null ? fmt(totalAsset) : '--';
+  document.getElementById('seedDisplay').textContent = seed > 0 ? `(시드 ${fmt(seed)})` : '';
   if (retRate !== null) {
     rateEl.textContent  = (retRate >= 0 ? '+' : '') + retRate.toFixed(2) + '%';
     rateEl.className    = 'metric-value ' + (retRate >= 0 ? 'c-green' : 'c-red');
