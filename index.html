@@ -566,6 +566,12 @@
   <!-- ══ Tab: 히스토리 ══ -->
   <div id="tabHistory" class="page-content hidden">
 
+    <!-- VR 대기 체결 (mmNoti 연동) -->
+    <div id="vrPendingSection" style="display:none; margin:8px 12px 0;">
+      <div style="font-size:12px; color:#818cf8; font-weight:600; margin-bottom:6px; padding:0 4px;">mmNoti 수신 대기</div>
+      <div id="vrPendingList"></div>
+    </div>
+
     <!-- 카카오톡 붙여넣기 -->
     <div class="paste-wrap">
       <div class="paste-label">체결 문자 입력</div>
@@ -1518,6 +1524,7 @@ function deleteTrade(id) {
 }
 
 function renderHistory() {
+  renderVrPending();
   const trades    = loadTrades();
   const startWeek = load(KEYS.startWeek) || '';
   const cycleInfo = getCycleInfo(startWeek);
@@ -2228,6 +2235,118 @@ function showSyncBadge(msg) {
 }
 
 /* ============================================================
+   mmNoti 연동 — vr_pending.json 폴링
+   ============================================================ */
+let vrPending = [];
+
+async function pollVrPending() {
+  const pat    = load(KEYS.githubPat);
+  const gistId = load(KEYS.gistId);
+  if (!pat || !gistId) return;
+  try {
+    const res  = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: { Authorization: `token ${pat}`, Accept: 'application/vnd.github.v3+json' }
+    });
+    if (!res.ok) return;
+    const json    = await res.json();
+    const content = json.files?.['vr_pending.json']?.content;
+    if (!content) return;
+    const items = JSON.parse(content);
+    if (!Array.isArray(items) || !items.length) return;
+    // 기존에 없는 항목만 추가
+    const existIds = new Set(vrPending.map(x => x.id));
+    const newItems = items.filter(x => !existIds.has(x.id));
+    if (!newItems.length) return;
+    vrPending = [...vrPending, ...newItems];
+    renderVrPending();
+    showSyncBadge(`mmNoti ${newItems.length}건 수신`);
+  } catch (_) {}
+}
+
+function renderVrPending() {
+  const sec  = document.getElementById('vrPendingSection');
+  const list = document.getElementById('vrPendingList');
+  if (!vrPending.length) { sec.style.display = 'none'; return; }
+  sec.style.display = 'block';
+  list.innerHTML = vrPending.map((t, idx) => `
+    <div style="background:#1e1b4b; border:1px solid #3730a3; border-radius:10px; padding:12px; margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+        <span style="color:${t.type==='매수'?'#22c55e':'#ef4444'}; font-weight:700;">${t.type}</span>
+        <span style="color:#64748b; font-size:12px;">${t.date}</span>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-bottom:10px;">
+        <div style="font-size:12px;"><div style="color:#64748b; margin-bottom:2px;">단가</div><div style="color:#e2e8f0;">$${t.price.toFixed(2)}</div></div>
+        <div style="font-size:12px;"><div style="color:#64748b; margin-bottom:2px;">수량</div><div style="color:#e2e8f0;">${t.qty}주</div></div>
+        <div style="font-size:12px;"><div style="color:#64748b; margin-bottom:2px;">금액</div><div style="color:#e2e8f0;">$${(t.amount||0).toFixed(2)}</div></div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button onclick="ignoreVrPending(${idx})" style="flex:1; padding:9px; background:#1e293b; border:1px solid #334155; border-radius:7px; color:#94a3b8; font-size:13px; cursor:pointer;">무시</button>
+        <button onclick="confirmVrPending(${idx})" style="flex:2; padding:9px; background:#3730a3; border:none; border-radius:7px; color:#c7d2fe; font-size:13px; font-weight:600; cursor:pointer;">VR에 반영</button>
+      </div>
+    </div>`).join('');
+}
+
+async function confirmVrPending(idx) {
+  const t = vrPending[idx];
+  if (!t) return;
+
+  const shares    = loadNum(KEYS.shares);
+  const pool      = loadNum(KEYS.pool);
+  const v1        = loadNum(KEYS.v1);
+  const g         = loadNum(KEYS.g) || 10;
+  const startWeek = load(KEYS.startWeek) || '';
+  const cycleInfo = getCycleInfo(startWeek);
+  const cycleWeek = cycleInfo ? cycleInfo.cycleWeek : 0;
+  const v2        = loadNum(KEYS.v2) || (v1 + pool / g);
+  const vlow      = v2 * 0.85;
+  const vhigh     = v2 * 1.15;
+  const newShares = t.type === '매수' ? shares + t.qty : shares - t.qty;
+  const newPool   = t.type === '매수' ? pool - t.amount : pool + t.amount;
+  const evalSnap  = t.price * newShares;
+
+  const record = {
+    id: Date.now(), timestamp: Date.now(),
+    date: t.date, type: t.type,
+    price: t.price, qty: t.qty, amount: t.amount, fee: 0,
+    sharesAfter: newShares, poolAfter: newPool,
+    cycleWeek,
+    v2snap: v2, vlowSnap: vlow, vhighSnap: vhigh, evalSnap,
+  };
+
+  const trades = loadTrades();
+  trades.push(record);
+  saveTrades(trades);
+  save(KEYS.shares, newShares);
+  save(KEYS.pool,   newPool);
+
+  vrPending.splice(idx, 1);
+  await clearVrPendingGist();
+  renderVrPending();
+  calculateAndRender();
+  autoGistPush();
+}
+
+async function ignoreVrPending(idx) {
+  vrPending.splice(idx, 1);
+  await clearVrPendingGist();
+  renderVrPending();
+}
+
+async function clearVrPendingGist() {
+  const pat    = load(KEYS.githubPat);
+  const gistId = load(KEYS.gistId);
+  if (!pat || !gistId) return;
+  const remaining = vrPending.length ? JSON.stringify(vrPending, null, 2) : '[]';
+  try {
+    await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: 'PATCH',
+      headers: { Authorization: `token ${pat}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files: { 'vr_pending.json': { content: remaining } } })
+    });
+  } catch (_) {}
+}
+
+/* ============================================================
    Boot
    ============================================================ */
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2239,6 +2358,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   if (hasSetup()) showDashboard();
   else document.getElementById('setupScreen').classList.remove('hidden');
+
+  // mmNoti 대기 체결 폴링 (60초 간격)
+  pollVrPending();
+  setInterval(pollVrPending, 60000);
 });
 </script>
 </body>
