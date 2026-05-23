@@ -572,6 +572,35 @@
       <div id="vrPendingList"></div>
     </div>
 
+    <!-- 과거 일일 평가금 임포트 -->
+    <div id="dailyImportWrap" style="margin:8px 12px 0;">
+      <details style="background:#1e293b; border:1px solid #334155; border-radius:10px; padding:12px;">
+        <summary style="font-size:12px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:.06em; cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center;">
+          과거 일일 평가금 임포트
+          <span style="font-size:10px; color:#475569;">▼</span>
+        </summary>
+        <div style="margin-top:12px;">
+          <div style="font-size:12px; color:#94a3b8; margin-bottom:8px; line-height:1.6;">
+            JSON 형식으로 붙여넣기 :<br>
+            <code style="font-size:11px; color:#60a5fa;">[{"date":"2026-05-01","price":45.20,"shares":100,"pool":5000}, ...]</code>
+          </div>
+          <textarea id="inp_dailyImport" rows="5"
+            style="width:100%; background:#0f172a; border:1px solid #334155; border-radius:8px;
+                   color:#f1f5f9; font-size:12px; font-family:monospace; padding:10px; resize:vertical;"
+            placeholder='[{"date":"2026-05-01","price":45.20,"shares":100,"pool":5000}]'></textarea>
+          <div style="display:flex; gap:8px; margin-top:8px;">
+            <button onclick="importDailyEvalsFromJSON()"
+              style="flex:1; background:#1d4ed8; color:#fff; border:none; border-radius:8px;
+                     padding:10px; font-size:13px; font-weight:600; cursor:pointer;">임포트</button>
+            <button onclick="document.getElementById('inp_dailyImport').value=''"
+              style="background:#0f172a; color:#64748b; border:1px solid #334155; border-radius:8px;
+                     padding:10px 14px; font-size:13px; cursor:pointer;">지우기</button>
+          </div>
+          <div id="dailyImportMsg" style="font-size:12px; text-align:center; margin-top:8px; min-height:16px;"></div>
+        </div>
+      </details>
+    </div>
+
     <!-- 카카오톡 붙여넣기 -->
     <div class="paste-wrap">
       <div class="paste-label">체결 문자 입력</div>
@@ -760,12 +789,14 @@ const KEYS = {
   gistId:           'vr_gist_id',
   v2:               'vr_v2',
   v2ForCycle:       'vr_v2_for_cycle',
+  dailyEvals:       'vr_daily_evals',
+  vHistory:         'vr_v_history',
 };
 
 // 클라우드 동기화 대상 키 (PAT·GistID는 제외 — 기기마다 따로 관리)
 const SYNC_KEYS = ['vr_v1','vr_shares','vr_pool','vr_g','vr_start_week',
                    'vr_unit_qty','vr_seed','vr_trades','vr_cycle_start_pool','vr_last_rollover_week',
-                   'vr_v2','vr_v2_for_cycle'];
+                   'vr_v2','vr_v2_for_cycle','vr_daily_evals','vr_v_history'];
 
 const save    = (k, v) => localStorage.setItem(k, String(v));
 const load    = (k)    => localStorage.getItem(k);
@@ -782,6 +813,57 @@ function saveTrades(arr) {
 
 function hasSetup() {
   return load(KEYS.v1) && load(KEYS.shares) && load(KEYS.pool) && load(KEYS.startWeek);
+}
+
+function loadDailyEvals() {
+  try { return JSON.parse(localStorage.getItem(KEYS.dailyEvals) || '[]'); }
+  catch { return []; }
+}
+function saveDailyEvals(arr) {
+  localStorage.setItem(KEYS.dailyEvals, JSON.stringify(arr));
+}
+// 날짜 기준 upsert — 같은 날짜면 덮어씀, 없으면 추가
+function addOrUpdateDailyEval(obj) {
+  const arr = loadDailyEvals();
+  const idx = arr.findIndex(d => d.date === obj.date);
+  if (idx >= 0) arr[idx] = obj; else arr.push(obj);
+  arr.sort((a, b) => a.date.localeCompare(b.date));
+  saveDailyEvals(arr);
+}
+/* V값 히스토리 — 사이클별 { cycleWeek, startDate, vlow, vhigh, shares } */
+function loadVHistory() {
+  try { return JSON.parse(localStorage.getItem(KEYS.vHistory) || '[]'); }
+  catch { return []; }
+}
+function saveVHistory(arr) {
+  localStorage.setItem(KEYS.vHistory, JSON.stringify(arr));
+}
+function addOrUpdateVHistory(obj) {
+  const arr = loadVHistory();
+  const idx = arr.findIndex(h => h.cycleWeek === obj.cycleWeek);
+  if (idx >= 0) arr[idx] = obj; else arr.push(obj);
+  arr.sort((a, b) => a.startDate.localeCompare(b.startDate));
+  saveVHistory(arr);
+}
+// 날짜(YYYY-MM-DD)에 해당하는 사이클 히스토리 반환 (startDate <= date 중 최신)
+function getCycleForDate(dateStr) {
+  const hist = loadVHistory();
+  let found = null;
+  for (const h of hist) {
+    if (dateStr >= h.startDate) found = h;
+  }
+  return found;
+}
+
+// "MM/DD" → "YYYY-MM-DD" (현재 연도 기준, 1~3월이면 연도 보정)
+function tradeDate2ISO(mmdd) {
+  if (!mmdd || !mmdd.includes('/')) return null;
+  const [mm, dd] = mmdd.split('/');
+  const now = new Date();
+  let year = now.getFullYear();
+  // 현재가 1~3월인데 날짜가 10~12월이면 작년 거래
+  if (now.getMonth() < 3 && parseInt(mm) >= 10) year -= 1;
+  return `${year}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
 }
 
 /* ============================================================
@@ -1004,6 +1086,86 @@ function setUI(state) {
     labelEl.style.color = '#f59e0b';
     document.getElementById('manualPriceWrap').classList.remove('hidden');
   }
+}
+
+/* ============================================================
+   Daily history fetch & auto backfill
+   ============================================================ */
+async function fetchDailyHistory(fromDateStr, toDateStr) {
+  const fromTs = Math.floor(new Date(fromDateStr).getTime() / 1000);
+  const toTs   = Math.floor(new Date(toDateStr).getTime()  / 1000) + 86400;
+
+  // 1. Finnhub candle API (기존 키 재사용)
+  try {
+    const res = await fetch(
+      `https://finnhub.io/api/v1/stock/candle?symbol=TQQQ&resolution=D&from=${fromTs}&to=${toTs}&token=${FINNHUB_KEY}`,
+      { cache: 'no-store' }
+    );
+    const j = await res.json();
+    if (j.s === 'ok' && j.t && j.c) {
+      return j.t.map((ts, i) => ({
+        date:  new Date(ts * 1000).toISOString().slice(0, 10),
+        close: j.c[i],
+      })).filter(d => d.close && d.date >= fromDateStr && d.date <= toDateStr);
+    }
+  } catch (e) { console.error('Finnhub history fail', e); }
+
+  // 2. Yahoo Finance 백업
+  try {
+    const diffDays = Math.ceil((new Date(toDateStr) - new Date(fromDateStr)) / 86400000) + 2;
+    const range = diffDays <= 7 ? '5d' : diffDays <= 32 ? '1mo' : diffDays <= 100 ? '3mo' : diffDays <= 200 ? '6mo' : '1y';
+    const YF_PATH = `https://query1.finance.yahoo.com/v8/finance/chart/TQQQ?interval=1d&range=${range}`;
+    const res = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(YF_PATH)}`);
+    const j = await res.json();
+    const result = j.chart?.result?.[0];
+    if (!result) return [];
+    const timestamps = result.timestamp || [];
+    const closes     = result.indicators?.quote?.[0]?.close || [];
+    return timestamps
+      .map((ts, i) => ({ date: new Date(ts * 1000).toISOString().slice(0, 10), close: closes[i] }))
+      .filter(d => d.close && d.date >= fromDateStr && d.date <= toDateStr);
+  } catch (e) { console.error('Yahoo history fail', e); }
+
+  return [];
+}
+
+async function autoBackfill() {
+  const shares = loadNum(KEYS.shares);
+  const pool   = loadNum(KEYS.pool);
+  const seed   = loadNum(KEYS.seed);
+  if (!shares || !seed) return;
+
+  const daily     = loadDailyEvals();
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const lastDate  = daily.length > 0 ? daily[daily.length - 1].date : null;
+
+  if (lastDate && lastDate >= yesterday) return; // 이미 최신
+
+  const fromDate = lastDate
+    ? new Date(new Date(lastDate).getTime() + 86400000).toISOString().slice(0, 10)
+    : yesterday;
+
+  if (fromDate > yesterday) return;
+
+  const history = await fetchDailyHistory(fromDate, yesterday);
+  if (!history.length) return;
+
+  const startWeek = load(KEYS.startWeek) || '';
+  for (const { date, close } of history) {
+    const cycleHist = getCycleForDate(date);
+    const dayShares = cycleHist ? cycleHist.shares : shares;
+    const evalVal   = Math.round(close * dayShares * 100) / 100;
+    const rate      = seed > 0 ? Math.round((evalVal + pool - seed) / seed * 10000) / 100 : 0;
+    const cycleInfo = getCycleInfo(startWeek);
+    addOrUpdateDailyEval({
+      date, eval: evalVal, rate,
+      vlow:      cycleHist ? cycleHist.vlow  : null,
+      vhigh:     cycleHist ? cycleHist.vhigh : null,
+      cycleWeek: cycleInfo ? cycleInfo.cycleWeek : 0,
+      source: 'backfill',
+    });
+  }
+  autoGistPush();
 }
 
 /* ============================================================
@@ -1322,6 +1484,109 @@ function parseAndVerify() {
 }
 
 /* ============================================================
+   Daily import
+   ============================================================ */
+function importDailyEvalsFromJSON() {
+  const raw  = document.getElementById('inp_dailyImport').value.trim();
+  const msg  = document.getElementById('dailyImportMsg');
+  if (!raw) { msg.style.color = '#f59e0b'; msg.textContent = '데이터를 입력하세요.'; return; }
+
+  const seed = loadNum(KEYS.seed);
+  const defaultShares = loadNum(KEYS.shares);
+  const defaultPool = loadNum(KEYS.pool);
+
+  let arr = [];
+  let isCSV = raw.includes('"') && raw.includes(',') && raw.includes('\n');
+
+  if (isCSV) {
+    // CSV 파싱
+    const lines = raw.split('\n').map(l => l.trim()).filter(l => l);
+    if (lines.length < 2) {
+      msg.style.color = '#ef4444'; msg.textContent = 'CSV는 헤더 + 최소 1개 데이터 행이 필요합니다.'; return;
+    }
+
+    // 헤더 파싱: "날짜","종가" 컬럼 위치 찾기
+    const headerLine = lines[0];
+    const headers = headerLine.split(',').map(h => h.replace(/"/g, '').trim());
+    const dateIdx = headers.findIndex(h => h === '날짜');
+    const priceIdx = headers.findIndex(h => h === '종가');
+
+    if (dateIdx === -1 || priceIdx === -1) {
+      msg.style.color = '#ef4444'; msg.textContent = '"날짜", "종가" 컬럼이 필요합니다.'; return;
+    }
+
+    // 데이터 행 파싱
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(',').map(v => v.replace(/"/g, '').trim());
+      if (values.length <= Math.max(dateIdx, priceIdx)) continue;
+
+      let dateStr = values[dateIdx] || '';
+      let priceStr = values[priceIdx] || '';
+
+      // 날짜 정규화: "2026- 05- 22" → "2026-05-22"
+      dateStr = dateStr.replace(/\s+/g, '');
+      const price = parseFloat(priceStr);
+
+      if (dateStr && !isNaN(price)) {
+        const cycleHist = getCycleForDate(dateStr);
+        arr.push({
+          date: dateStr,
+          price: price,
+          shares: cycleHist ? cycleHist.shares : defaultShares,
+          pool: defaultPool,
+          vlow:  cycleHist ? cycleHist.vlow  : null,
+          vhigh: cycleHist ? cycleHist.vhigh : null,
+        });
+      }
+    }
+  } else {
+    // JSON 파싱
+    try { arr = JSON.parse(raw); } catch {
+      msg.style.color = '#ef4444'; msg.textContent = 'JSON 형식 오류. 다시 확인하세요.'; return;
+    }
+    if (!Array.isArray(arr) || arr.length === 0) {
+      msg.style.color = '#ef4444'; msg.textContent = '배열 형식이 아닙니다.'; return;
+    }
+  }
+
+  let count = 0;
+  for (const item of arr) {
+    if (!item.date || !item.price) continue;
+
+    const cycleHist = getCycleForDate(item.date);
+    const shares = item.shares ?? (cycleHist ? cycleHist.shares : defaultShares);
+    const pool = item.pool ?? defaultPool;
+
+    if (shares == null) continue;
+
+    const evalVal = Math.round(item.price * shares * 100) / 100;
+    const rate = seed > 0 ? Math.round((evalVal + pool - seed) / seed * 10000) / 100 : 0;
+    const cycleInfo = getCycleInfo(load(KEYS.startWeek) || '');
+    addOrUpdateDailyEval({
+      date:      item.date,
+      eval:      evalVal,
+      rate,
+      vlow:  item.vlow  ?? (cycleHist ? cycleHist.vlow  : null),
+      vhigh: item.vhigh ?? (cycleHist ? cycleHist.vhigh : null),
+      cycleWeek: cycleInfo ? cycleInfo.cycleWeek : 0,
+      source:    'imported',
+    });
+    count++;
+  }
+
+  if (count > 0) {
+    autoGistPush();
+    if (activeTab === 'history') renderHistory();
+    msg.style.color = '#22c55e';
+    msg.textContent = `${count}건 임포트 완료`;
+    document.getElementById('inp_dailyImport').value = '';
+  } else {
+    msg.style.color = '#ef4444';
+    msg.textContent = '임포트할 항목이 없습니다. date·price 필드와 현재 shares/pool 설정을 확인하세요.';
+  }
+}
+
+/* ============================================================
    Phase 4 — 카카오톡 파싱 & 히스토리
    ============================================================ */
 function parseTrade(text) {
@@ -1482,6 +1747,14 @@ function confirmTrade() {
   save(KEYS.shares, newShares);
   save(KEYS.pool,   newPool);
 
+  // 거래일 일일 평가금 자동 기록
+  const isoDate = tradeDate2ISO(record.date);
+  if (isoDate) {
+    const seed2 = loadNum(KEYS.seed);
+    const rate2  = seed2 > 0 ? Math.round((evalSnap + newPool - seed2) / seed2 * 10000) / 100 : 0;
+    addOrUpdateDailyEval({ date: isoDate, eval: evalSnap, rate: rate2, cycleWeek, source: 'trade' });
+  }
+
   pendingTrade = null;
   document.getElementById('inp_tradeText').value = '';
   document.getElementById('tradePreview').innerHTML = '';
@@ -1632,13 +1905,42 @@ function drawEvalChart(trades) {
   const pw = W - P.left - P.right;
   const ph = H - P.top  - P.bottom;
 
-  const pts = trades.map((t, i) => ({
-    i, eval: t.evalSnap, v2: t.v2snap,
-    vlow: t.vlowSnap, vhigh: t.vhighSnap,
-    type: t.type, date: t.date,
-  }));
+  // 폴백용 현재 V값
+  const v1   = loadNum(KEYS.v1);
+  const pool = loadNum(KEYS.pool);
+  const g    = loadNum(KEYS.g) || 10;
+  const v2fb = loadNum(KEYS.v2) || (v1 + pool / g);
+  const vlowFb  = v2fb * 0.85;
+  const vhighFb = v2fb * 1.15;
 
-  const allY = pts.flatMap(p => [p.eval, p.vlow, p.vhigh]);
+  // 거래 포인트 (isoDate로 변환)
+  const tradeMap = {};
+  trades.forEach(t => {
+    const iso = tradeDate2ISO(t.date);
+    if (iso) tradeMap[iso] = { eval: t.evalSnap, type: t.type, isTrade: true };
+  });
+
+  // 일일 포인트 (vlow, vhigh 포함)
+  const daily = loadDailyEvals();
+  const merged = {};
+  daily.forEach(d => { merged[d.date] = { eval: d.eval, vlow: d.vlow, vhigh: d.vhigh, isTrade: false }; });
+  Object.entries(tradeMap).forEach(([date, tp]) => {
+    merged[date] = { ...(merged[date] || {}), ...tp };
+  });
+
+  // 각 포인트에 사이클별 vlow/vhigh 결정 (일일 데이터 → vHistory 조회 → 폴백)
+  const pts = Object.entries(merged)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, p], i) => {
+      const ch = getCycleForDate(date);
+      const pVlow  = p.vlow  ?? (ch ? ch.vlow  : vlowFb);
+      const pVhigh = p.vhigh ?? (ch ? ch.vhigh : vhighFb);
+      return { i, date, eval: p.eval, type: p.type || 'daily', isTrade: p.isTrade || false, vlow: pVlow, vhigh: pVhigh };
+    });
+
+  if (pts.length === 0) return;
+
+  const allY = pts.flatMap(p => [p.eval, p.vlow, p.vhigh]).filter(v => v != null);
   const minY = Math.min(...allY) * 0.97;
   const maxY = Math.max(...allY) * 1.03;
   const rng  = maxY - minY || 1;
@@ -1646,37 +1948,42 @@ function drawEvalChart(trades) {
   const tx = i => P.left + (pts.length <= 1 ? pw / 2 : i / (pts.length - 1) * pw);
   const ty = v => P.top  + ph - (v - minY) / rng * ph;
 
-  // Background already #0f172a via CSS
+  // V band fill — 사이클별 높이 반영 (포인트 사이를 사각형으로 채움)
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p1 = pts[i], p2 = pts[i + 1];
+    ctx.beginPath();
+    ctx.moveTo(tx(i),   ty(p1.vlow));
+    ctx.lineTo(tx(i+1), ty(p2.vlow));
+    ctx.lineTo(tx(i+1), ty(p2.vhigh));
+    ctx.lineTo(tx(i),   ty(p1.vhigh));
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(34,197,94,0.05)';
+    ctx.fill();
+  }
 
-  // V band fill
-  ctx.beginPath();
-  pts.forEach((p, i) => i === 0 ? ctx.moveTo(tx(i), ty(p.vlow)) : ctx.lineTo(tx(i), ty(p.vlow)));
-  [...pts].reverse().forEach((p, i) => ctx.lineTo(tx(pts.length - 1 - i), ty(p.vhigh)));
-  ctx.closePath();
-  ctx.fillStyle = 'rgba(34,197,94,0.05)';
-  ctx.fill();
-
-  // Dashed lines: vlow, vhigh, v2
-  const dashLine = (key, color) => {
-    ctx.beginPath(); ctx.setLineDash([4, 3]);
-    ctx.strokeStyle = color; ctx.lineWidth = 1;
-    pts.forEach((p, i) => i === 0 ? ctx.moveTo(tx(i), ty(p[key])) : ctx.lineTo(tx(i), ty(p[key])));
-    ctx.stroke();
-  };
-  dashLine('vlow',  'rgba(34,197,94,0.55)');
-  dashLine('vhigh', 'rgba(239,68,68,0.55)');
-  dashLine('v2',    'rgba(96,165,250,0.45)');
-
-  // Eval line
-  ctx.setLineDash([]);
-  ctx.beginPath(); ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2;
-  pts.forEach((p, i) => i === 0 ? ctx.moveTo(tx(i), ty(p.eval)) : ctx.lineTo(tx(i), ty(p.eval)));
+  // Vlow / Vhigh 점선 — 사이클별 계단식
+  ctx.setLineDash([4, 3]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.strokeStyle = 'rgba(34,197,94,0.55)';
+  pts.forEach((p, i) => i === 0 ? ctx.moveTo(tx(i), ty(p.vlow))  : ctx.lineTo(tx(i), ty(p.vlow)));
+  ctx.stroke();
+  ctx.beginPath(); ctx.strokeStyle = 'rgba(239,68,68,0.55)';
+  pts.forEach((p, i) => i === 0 ? ctx.moveTo(tx(i), ty(p.vhigh)) : ctx.lineTo(tx(i), ty(p.vhigh)));
   ctx.stroke();
 
-  // Trade dots
-  pts.forEach(p => {
+  // 일일 평가금 라인 (얇은 선)
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1.5;
+  let started = false;
+  pts.forEach((p, i) => {
+    if (!started) { ctx.moveTo(tx(i), ty(p.eval)); started = true; }
+    else ctx.lineTo(tx(i), ty(p.eval));
+  });
+  ctx.stroke();
+
+  // 거래 점 (크게, 매수=초록, 매도=빨강)
+  pts.filter(p => p.isTrade).forEach(p => {
     ctx.beginPath();
-    ctx.arc(tx(p.i), ty(p.eval), 4.5, 0, Math.PI * 2);
+    ctx.arc(tx(p.i), ty(p.eval), 5, 0, Math.PI * 2);
     ctx.fillStyle   = p.type === '매수' ? '#22c55e' : '#ef4444';
     ctx.fill();
     ctx.strokeStyle = '#0f172a'; ctx.lineWidth = 1.5;
@@ -1694,12 +2001,13 @@ function drawEvalChart(trades) {
     ctx.fillText(label, P.left - 5, ty(v));
   }
 
-  // X axis date labels (up to 5)
+  // X axis date labels (up to 5, MM/DD 형식으로 표시)
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
   const step = Math.max(1, Math.ceil(pts.length / 5));
   pts.forEach((p, i) => {
     if (i % step === 0 || i === pts.length - 1) {
-      ctx.fillText(p.date, tx(i), H - P.bottom + 5);
+      const label = p.date.length === 10 ? p.date.slice(5).replace('-', '/') : p.date;
+      ctx.fillText(label, tx(i), H - P.bottom + 5);
     }
   });
 }
@@ -1725,12 +2033,29 @@ function drawRateChart(trades) {
   const pw = W - P.left - P.right;
   const ph = H - P.top  - P.bottom;
 
-  const pts = trades.map((t, i) => ({
-    i,
-    rate: (t.evalSnap + t.poolAfter - seed) / seed * 100,
-    date: t.date,
-    type: t.type,
-  }));
+  // 거래 포인트 (isoDate 기준)
+  const tradeMap = {};
+  trades.forEach(t => {
+    const iso = tradeDate2ISO(t.date);
+    if (iso) tradeMap[iso] = {
+      rate: (t.evalSnap + t.poolAfter - seed) / seed * 100,
+      type: t.type, isTrade: true,
+    };
+  });
+
+  // 일일 포인트
+  const daily = loadDailyEvals();
+  const merged = {};
+  daily.forEach(d => { merged[d.date] = { rate: d.rate, isTrade: false }; });
+  Object.entries(tradeMap).forEach(([date, tp]) => {
+    merged[date] = { ...(merged[date] || {}), ...tp };
+  });
+
+  const pts = Object.entries(merged)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, p], i) => ({ i, date, rate: p.rate, type: p.type || 'daily', isTrade: p.isTrade || false }));
+
+  if (pts.length === 0) return;
 
   const rates = pts.map(p => p.rate);
   const minY  = Math.min(...rates, 0) - 2;
@@ -1740,32 +2065,35 @@ function drawRateChart(trades) {
   const tx = i => P.left + (pts.length <= 1 ? pw / 2 : i / (pts.length - 1) * pw);
   const ty = v => P.top  + ph - (v - minY) / rng * ph;
 
-  // 가로 그리드
-  ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+  // 가로 그리드 (0% 기준선 강조)
+  ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i++) {
     const v = minY + rng * i / 4;
-    const is0 = Math.abs(v) < rng * 0.01;
-    ctx.strokeStyle = is0 ? 'rgba(148,163,184,0.35)' : 'rgba(148,163,184,0.12)';
+    const is0 = Math.abs(v) < rng * 0.05;
+    ctx.setLineDash(is0 ? [] : [3, 3]);
+    ctx.strokeStyle = is0 ? 'rgba(148,163,184,0.4)' : 'rgba(148,163,184,0.12)';
     ctx.beginPath();
     ctx.moveTo(P.left, ty(v)); ctx.lineTo(P.left + pw, ty(v));
     ctx.stroke();
   }
   ctx.setLineDash([]);
 
-  // 수익률 라인
-  ctx.beginPath(); ctx.lineWidth = 2;
+  // 수익률 라인 (양수=초록, 음수=빨강으로 구간별 색상)
+  ctx.lineWidth = 1.5;
   pts.forEach((p, i) => {
+    if (i === 0) return;
+    const prev = pts[i - 1];
+    ctx.beginPath();
     ctx.strokeStyle = p.rate >= 0 ? '#22c55e' : '#ef4444';
-    if (i === 0) { ctx.moveTo(tx(i), ty(p.rate)); return; }
-    ctx.lineTo(tx(i), ty(p.rate));
+    ctx.moveTo(tx(i - 1), ty(prev.rate));
+    ctx.lineTo(tx(i),     ty(p.rate));
     ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(tx(i), ty(p.rate));
   });
 
-  // 점
-  pts.forEach(p => {
+  // 거래 점만 강조
+  pts.filter(p => p.isTrade).forEach(p => {
     ctx.beginPath();
-    ctx.arc(tx(p.i), ty(p.rate), 4, 0, Math.PI * 2);
+    ctx.arc(tx(p.i), ty(p.rate), 4.5, 0, Math.PI * 2);
     ctx.fillStyle   = p.type === '매수' ? '#22c55e' : '#ef4444';
     ctx.fill();
     ctx.strokeStyle = '#0f172a'; ctx.lineWidth = 1.5;
@@ -1780,12 +2108,14 @@ function drawRateChart(trades) {
     ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(1) + '%', P.left - 4, ty(v));
   }
 
-  // X축 날짜
+  // X축 날짜 (MM/DD 형식)
   ctx.fillStyle = '#475569'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
   const step = Math.max(1, Math.ceil(pts.length / 5));
   pts.forEach((p, i) => {
-    if (i % step === 0 || i === pts.length - 1)
-      ctx.fillText(p.date, tx(i), H - P.bottom + 5);
+    if (i % step === 0 || i === pts.length - 1) {
+      const label = p.date.length === 10 ? p.date.slice(5).replace('-', '/') : p.date;
+      ctx.fillText(label, tx(i), H - P.bottom + 5);
+    }
   });
 }
 
@@ -1815,6 +2145,19 @@ function rolloverCycle() {
   }
 
   if (!confirm(`V2: ${fmtAmt(v2)}\n\n이 값을 새 사이클(${cycleInfo.cycleWeek + 2}주차)의 V1으로 설정합니다.\n계속하시겠습니까?`)) return;
+
+  // 다음 사이클 V밴드를 히스토리에 기록
+  const nextVlow  = Math.round(v2 * 0.85);
+  const nextVhigh = Math.round(v2 * 1.15);
+  const nextStart = new Date(cycleInfo.startDate);
+  nextStart.setUTCDate(nextStart.getUTCDate() + 14);
+  addOrUpdateVHistory({
+    cycleWeek: cycleInfo.cycleWeek + 2,
+    startDate: nextStart.toISOString().slice(0, 10),
+    vlow:  nextVlow,
+    vhigh: nextVhigh,
+    shares,
+  });
 
   save(KEYS.v1,               v2);
   save(KEYS.cycleStartPool,   pool);
@@ -2367,8 +2710,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     await autoGistPull();
   }
 
-  if (hasSetup()) showDashboard();
-  else document.getElementById('setupScreen').classList.remove('hidden');
+  if (hasSetup()) {
+    showDashboard();
+    autoBackfill(); // 빠진 날짜 일일 평가금 자동 백필 (백그라운드)
+  } else {
+    document.getElementById('setupScreen').classList.remove('hidden');
+  }
 
   // mmNoti 대기 체결 폴링 (60초 간격)
   pollVrPending();
