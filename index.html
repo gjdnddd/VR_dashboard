@@ -1143,7 +1143,7 @@ async function autoBackfill() {
 
   const fromDate = lastDate
     ? new Date(new Date(lastDate).getTime() + 86400000).toISOString().slice(0, 10)
-    : yesterday;
+    : (load(KEYS.startWeek) || yesterday);
 
   if (fromDate > yesterday) return;
 
@@ -1928,6 +1928,15 @@ function drawEvalChart(trades) {
     merged[date] = { ...(merged[date] || {}), ...tp };
   });
 
+  // vr_v_history 사이클 시작일을 기준점으로 추가 (startPrice가 있으면 eval 계산, 없으면 V밴드만 — 3월부터 표시)
+  loadVHistory().forEach(h => {
+    if (!merged[h.startDate]) {
+      // startPrice와 startShares가 있으면 eval 계산, 없으면 null
+      const eval = (h.startPrice != null && h.startShares) ? h.startPrice * h.startShares : null;
+      merged[h.startDate] = { eval: eval, vlow: h.vlow, vhigh: h.vhigh, isTrade: false };
+    }
+  });
+
   // 각 포인트에 사이클별 vlow/vhigh 결정 (일일 데이터 → vHistory 조회 → 폴백)
   const pts = Object.entries(merged)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -1961,8 +1970,16 @@ function drawEvalChart(trades) {
     ctx.fill();
   }
 
-  // Vlow / Vhigh 점선 — 사이클별 계단식
+  // V2 중심선 (파란 점선)
   ctx.setLineDash([4, 3]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.strokeStyle = 'rgba(96,165,250,0.55)';
+  pts.forEach((p, i) => {
+    const v2 = p.vhigh / 1.15;
+    i === 0 ? ctx.moveTo(tx(i), ty(v2)) : ctx.lineTo(tx(i), ty(v2));
+  });
+  ctx.stroke();
+
+  // Vlow / Vhigh 점선 — 사이클별 계단식
   ctx.beginPath(); ctx.strokeStyle = 'rgba(34,197,94,0.55)';
   pts.forEach((p, i) => i === 0 ? ctx.moveTo(tx(i), ty(p.vlow))  : ctx.lineTo(tx(i), ty(p.vlow)));
   ctx.stroke();
@@ -1970,11 +1987,12 @@ function drawEvalChart(trades) {
   pts.forEach((p, i) => i === 0 ? ctx.moveTo(tx(i), ty(p.vhigh)) : ctx.lineTo(tx(i), ty(p.vhigh)));
   ctx.stroke();
 
-  // 일일 평가금 라인 (얇은 선)
+  // 일일 평가금 라인 (eval 있는 포인트만 연결, eval=null은 선 끊김)
   ctx.setLineDash([]);
   ctx.beginPath(); ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1.5;
   let started = false;
   pts.forEach((p, i) => {
+    if (p.eval == null) { started = false; return; }
     if (!started) { ctx.moveTo(tx(i), ty(p.eval)); started = true; }
     else ctx.lineTo(tx(i), ty(p.eval));
   });
@@ -2039,21 +2057,35 @@ function drawRateChart(trades) {
     const iso = tradeDate2ISO(t.date);
     if (iso) tradeMap[iso] = {
       rate: (t.evalSnap + t.poolAfter - seed) / seed * 100,
-      type: t.type, isTrade: true,
+      type: t.type, isTrade: true, cycleWeek: t.cycleWeek,
     };
   });
 
   // 일일 포인트
   const daily = loadDailyEvals();
   const merged = {};
-  daily.forEach(d => { merged[d.date] = { rate: d.rate, isTrade: false }; });
+  daily.forEach(d => { merged[d.date] = { rate: d.rate, isTrade: false, cycleWeek: d.cycleWeek }; });
   Object.entries(tradeMap).forEach(([date, tp]) => {
     merged[date] = { ...(merged[date] || {}), ...tp };
   });
 
+  // vr_v_history 사이클 시작일을 기준점으로 추가 (startPrice가 있으면 rate 계산)
+  loadVHistory().forEach(h => {
+    if (!merged[h.startDate]) {
+      const rate = (h.startPrice != null && h.startShares != null && h.startPool != null)
+        ? (h.startPrice * h.startShares + h.startPool - seed) / seed * 100
+        : null;
+      merged[h.startDate] = { rate: rate, isTrade: false, cycleWeek: h.cycleWeek };
+    }
+  });
+
   const pts = Object.entries(merged)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, p], i) => ({ i, date, rate: p.rate, type: p.type || 'daily', isTrade: p.isTrade || false }));
+    .map(([date, p], i) => {
+      const ch = getCycleForDate(date);
+      return { i, date, rate: p.rate, type: p.type || 'daily', isTrade: p.isTrade || false,
+               cycleWeek: p.cycleWeek ?? (ch ? ch.cycleWeek : null) };
+    });
 
   if (pts.length === 0) return;
 
@@ -2098,6 +2130,31 @@ function drawRateChart(trades) {
     ctx.fill();
     ctx.strokeStyle = '#0f172a'; ctx.lineWidth = 1.5;
     ctx.stroke();
+  });
+
+  // 거래 시점 수익률 레이블
+  ctx.font = 'bold 9px sans-serif';
+  pts.filter(p => p.isTrade).forEach(p => {
+    const label = (p.rate >= 0 ? '+' : '') + p.rate.toFixed(1) + '%';
+    const x = tx(p.i), y = ty(p.rate);
+    ctx.fillStyle = p.type === '매수' ? '#22c55e' : '#ef4444';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = p.rate >= 0 ? 'bottom' : 'top';
+    ctx.fillText(label, Math.min(Math.max(x, P.left + 18), P.left + pw - 18), y + (p.rate >= 0 ? -8 : 8));
+  });
+
+  // 사이클 전환 시점 수익률 레이블 (파란색)
+  pts.forEach((p, i) => {
+    if (i === 0 || p.isTrade || p.cycleWeek == null) return;
+    const prev = pts[i - 1];
+    if (prev.cycleWeek != null && p.cycleWeek !== prev.cycleWeek) {
+      const label = (p.rate >= 0 ? '+' : '') + p.rate.toFixed(1) + '%';
+      const x = tx(p.i), y = ty(p.rate);
+      ctx.fillStyle = '#60a5fa';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = p.rate >= 0 ? 'bottom' : 'top';
+      ctx.fillText(label, Math.min(Math.max(x, P.left + 18), P.left + pw - 18), y + (p.rate >= 0 ? -8 : 8));
+    }
   });
 
   // Y축 레이블
@@ -2146,7 +2203,7 @@ function rolloverCycle() {
 
   if (!confirm(`V2: ${fmtAmt(v2)}\n\n이 값을 새 사이클(${cycleInfo.cycleWeek + 2}주차)의 V1으로 설정합니다.\n계속하시겠습니까?`)) return;
 
-  // 다음 사이클 V밴드를 히스토리에 기록
+  // 다음 사이클 V밴드를 히스토리에 기록 (startShares, startPool, startPrice 포함)
   const nextVlow  = Math.round(v2 * 0.85);
   const nextVhigh = Math.round(v2 * 1.15);
   const nextStart = new Date(cycleInfo.startDate);
@@ -2157,6 +2214,9 @@ function rolloverCycle() {
     vlow:  nextVlow,
     vhigh: nextVhigh,
     shares,
+    startShares: shares,
+    startPool: pool,
+    startPrice: currentPrice,
   });
 
   save(KEYS.v1,               v2);
