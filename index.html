@@ -761,7 +761,6 @@ const KEYS = {
   gistId:           'vr_gist_id',
   v2:               'vr_v2',
   v2ForCycle:       'vr_v2_for_cycle',
-  dailyEvals:       'vr_daily_evals',
   vHistory:         'vr_v_history',
   rolloverSnap:     'vr_rollover_snap',
 };
@@ -769,45 +768,47 @@ const KEYS = {
 // 클라우드 동기화 대상 키 (PAT·GistID는 제외 — 기기마다 따로 관리)
 const SYNC_KEYS = ['vr_v1','vr_shares','vr_pool','vr_g','vr_start_week',
                    'vr_unit_qty','vr_seed','vr_trades','vr_cycle_start_pool','vr_last_rollover_week',
-                   'vr_v2','vr_v2_for_cycle','vr_daily_evals','vr_v_history','vr_rollover_snap'];
+                   'vr_v2','vr_v2_for_cycle','vr_v_history','vr_rollover_snap'];
 
 const save    = (k, v) => localStorage.setItem(k, String(v));
 const load    = (k)    => localStorage.getItem(k);
 const loadNum = (k)    => parseFloat(localStorage.getItem(k)) || 0;
 
-function loadTrades() {
-  try { return JSON.parse(localStorage.getItem(KEYS.trades) || '[]'); }
-  catch { return []; }
+// JSON 로드 헬퍼 — try/catch 반복 제거
+function loadJSON(key, fallback = null) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw !== null ? JSON.parse(raw) : fallback;
+  } catch { return fallback; }
 }
+
+// V2 헬퍼 — 저장된 V2 우선, 없으면 축약 공식
+function getEffectiveV2() {
+  const stored = loadNum(KEYS.v2);
+  if (stored > 0) return stored;
+  return loadNum(KEYS.v1) + loadNum(KEYS.pool) / (loadNum(KEYS.g) || 10);
+}
+
+// Gist API 공통 헤더
+function gistHeaders(pat) {
+  return {
+    'Authorization': `token ${pat}`,
+    'Accept': 'application/vnd.github.v3+json',
+    'Content-Type': 'application/json',
+  };
+}
+
+function loadTrades()   { return loadJSON(KEYS.trades,   []) || []; }
 function saveTrades(arr) {
   localStorage.setItem(KEYS.trades, JSON.stringify(arr));
-  autoGistPush(); // 거래내역 변경 시 자동 동기화
 }
 
 function hasSetup() {
   return load(KEYS.v1) && load(KEYS.shares) && load(KEYS.pool) && load(KEYS.startWeek);
 }
 
-function loadDailyEvals() {
-  try { return JSON.parse(localStorage.getItem(KEYS.dailyEvals) || '[]'); }
-  catch { return []; }
-}
-function saveDailyEvals(arr) {
-  localStorage.setItem(KEYS.dailyEvals, JSON.stringify(arr));
-}
-// 날짜 기준 upsert — 같은 날짜면 덮어씀, 없으면 추가
-function addOrUpdateDailyEval(obj) {
-  const arr = loadDailyEvals();
-  const idx = arr.findIndex(d => d.date === obj.date);
-  if (idx >= 0) arr[idx] = obj; else arr.push(obj);
-  arr.sort((a, b) => a.date.localeCompare(b.date));
-  saveDailyEvals(arr);
-}
 /* V값 히스토리 — 사이클별 { cycleWeek, startDate, vlow, vhigh, shares } */
-function loadVHistory() {
-  try { return JSON.parse(localStorage.getItem(KEYS.vHistory) || '[]'); }
-  catch { return []; }
-}
+function loadVHistory()  { return loadJSON(KEYS.vHistory, []) || []; }
 function saveVHistory(arr) {
   localStorage.setItem(KEYS.vHistory, JSON.stringify(arr));
 }
@@ -817,26 +818,6 @@ function addOrUpdateVHistory(obj) {
   if (idx >= 0) arr[idx] = obj; else arr.push(obj);
   arr.sort((a, b) => a.startDate.localeCompare(b.startDate));
   saveVHistory(arr);
-}
-// 날짜(YYYY-MM-DD)에 해당하는 사이클 히스토리 반환 (startDate <= date 중 최신)
-function getCycleForDate(dateStr) {
-  const hist = loadVHistory();
-  let found = null;
-  for (const h of hist) {
-    if (dateStr >= h.startDate) found = h;
-  }
-  return found;
-}
-
-// "MM/DD" → "YYYY-MM-DD" (현재 연도 기준, 1~3월이면 연도 보정)
-function tradeDate2ISO(mmdd) {
-  if (!mmdd || !mmdd.includes('/')) return null;
-  const [mm, dd] = mmdd.split('/');
-  const now = new Date();
-  let year = now.getFullYear();
-  // 현재가 1~3월인데 날짜가 10~12월이면 작년 거래
-  if (now.getMonth() < 3 && parseInt(mm) >= 10) year -= 1;
-  return `${year}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
 }
 
 /* ============================================================
@@ -1062,86 +1043,6 @@ function setUI(state) {
 }
 
 /* ============================================================
-   Daily history fetch & auto backfill
-   ============================================================ */
-async function fetchDailyHistory(fromDateStr, toDateStr) {
-  const fromTs = Math.floor(new Date(fromDateStr).getTime() / 1000);
-  const toTs   = Math.floor(new Date(toDateStr).getTime()  / 1000) + 86400;
-
-  // 1. Finnhub candle API (기존 키 재사용)
-  try {
-    const res = await fetch(
-      `https://finnhub.io/api/v1/stock/candle?symbol=TQQQ&resolution=D&from=${fromTs}&to=${toTs}&token=${FINNHUB_KEY}`,
-      { cache: 'no-store' }
-    );
-    const j = await res.json();
-    if (j.s === 'ok' && j.t && j.c) {
-      return j.t.map((ts, i) => ({
-        date:  new Date(ts * 1000).toISOString().slice(0, 10),
-        close: j.c[i],
-      })).filter(d => d.close && d.date >= fromDateStr && d.date <= toDateStr);
-    }
-  } catch (e) { console.error('Finnhub history fail', e); }
-
-  // 2. Yahoo Finance 백업
-  try {
-    const diffDays = Math.ceil((new Date(toDateStr) - new Date(fromDateStr)) / 86400000) + 2;
-    const range = diffDays <= 7 ? '5d' : diffDays <= 32 ? '1mo' : diffDays <= 100 ? '3mo' : diffDays <= 200 ? '6mo' : '1y';
-    const YF_PATH = `https://query1.finance.yahoo.com/v8/finance/chart/TQQQ?interval=1d&range=${range}`;
-    const res = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(YF_PATH)}`);
-    const j = await res.json();
-    const result = j.chart?.result?.[0];
-    if (!result) return [];
-    const timestamps = result.timestamp || [];
-    const closes     = result.indicators?.quote?.[0]?.close || [];
-    return timestamps
-      .map((ts, i) => ({ date: new Date(ts * 1000).toISOString().slice(0, 10), close: closes[i] }))
-      .filter(d => d.close && d.date >= fromDateStr && d.date <= toDateStr);
-  } catch (e) { console.error('Yahoo history fail', e); }
-
-  return [];
-}
-
-async function autoBackfill() {
-  const shares = loadNum(KEYS.shares);
-  const pool   = loadNum(KEYS.pool);
-  const seed   = loadNum(KEYS.seed);
-  if (!shares || !seed) return;
-
-  const daily     = loadDailyEvals();
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-  const lastDate  = daily.length > 0 ? daily[daily.length - 1].date : null;
-
-  if (lastDate && lastDate >= yesterday) return; // 이미 최신
-
-  const fromDate = lastDate
-    ? new Date(new Date(lastDate).getTime() + 86400000).toISOString().slice(0, 10)
-    : (load(KEYS.startWeek) || yesterday);
-
-  if (fromDate > yesterday) return;
-
-  const history = await fetchDailyHistory(fromDate, yesterday);
-  if (!history.length) return;
-
-  const startWeek = load(KEYS.startWeek) || '';
-  for (const { date, close } of history) {
-    const cycleHist = getCycleForDate(date);
-    const dayShares = cycleHist ? cycleHist.shares : shares;
-    const evalVal   = Math.round(close * dayShares * 100) / 100;
-    const rate      = seed > 0 ? Math.round((evalVal + pool - seed) / seed * 10000) / 100 : 0;
-    const cycleInfo = getCycleInfo(startWeek);
-    addOrUpdateDailyEval({
-      date, eval: evalVal, rate,
-      vlow:      cycleHist ? cycleHist.vlow  : null,
-      vhigh:     cycleHist ? cycleHist.vhigh : null,
-      cycleWeek: cycleInfo ? cycleInfo.cycleWeek : 0,
-      source: 'backfill',
-    });
-  }
-  autoGistPush();
-}
-
-/* ============================================================
    Formatting
    ============================================================ */
 function fmt(n) {
@@ -1157,11 +1058,6 @@ function fmtAmt(n) {
 /* ============================================================
    Buy / Sell table logic
    ============================================================ */
-function unitSteps(base) {
-  const seq = [1, 2, 5, 10];
-  return [base, ...seq.filter(s => s > base)];
-}
-
 function runBuySimulation(price, shares, vlow, pool, unit) {
   const floor = price * 0.80, limit = pool * 0.75;
   let sim = shares, used = 0, cum = 0;
@@ -1177,15 +1073,6 @@ function runBuySimulation(price, shares, vlow, pool, unit) {
   return rows;
 }
 
-function calcBuyTable(price, shares, vlow, pool, base) {
-  for (const unit of unitSteps(base)) {
-    const rows = runBuySimulation(price, shares, vlow, pool, unit);
-    if (rows.length <= 10) return { rows, unit };
-  }
-  const last = unitSteps(base).at(-1);
-  return { rows: runBuySimulation(price, shares, vlow, pool, last).slice(0, 10), unit: last };
-}
-
 function runSellSimulation(price, shares, vhigh, unit) {
   const ceil = price * 1.20;
   let sim = shares, gain = 0, cum = 0;
@@ -1198,15 +1085,6 @@ function runSellSimulation(price, shares, vhigh, unit) {
     rows.push({ price: trig, qty: unit, cumQty: cum, poolGain: gain });
   }
   return rows;
-}
-
-function calcSellTable(price, shares, vhigh, base) {
-  for (const unit of unitSteps(base)) {
-    const rows = runSellSimulation(price, shares, vhigh, unit);
-    if (rows.length <= 10) return { rows, unit };
-  }
-  const last = unitSteps(base).at(-1);
-  return { rows: runSellSimulation(price, shares, vhigh, last).slice(0, 10), unit: last };
 }
 
 /* ============================================================
@@ -1320,12 +1198,6 @@ function parseExcelOrders(text) {
   return orders;
 }
 
-function applyVerifyUnit(qty) {
-  buyUnit = qty;
-  calculateAndRender();
-  parseAndVerify();
-}
-
 function adjustBuyUnitVerify(delta) {
   const unitQty = loadNum(KEYS.unitQty) || 1;
   buyUnit = Math.max(1, (buyUnit !== null ? buyUnit : unitQty) + delta);
@@ -1359,7 +1231,7 @@ function parseAndVerify() {
   const shares  = loadNum(KEYS.shares);
   const pool    = loadNum(KEYS.pool);
   const unitQty = loadNum(KEYS.unitQty) || 1;
-  const v2   = loadNum(KEYS.v2) || (loadNum(KEYS.v1) + pool / (loadNum(KEYS.g) || 10));
+  const v2    = getEffectiveV2();
   const vlow  = v2 * 0.85;
   const vhigh = v2 * 1.15;
 
@@ -1454,109 +1326,6 @@ function parseAndVerify() {
 
   html += '<div style="height:24px;"></div>';
   resultEl.innerHTML = html;
-}
-
-/* ============================================================
-   Daily import
-   ============================================================ */
-function importDailyEvalsFromJSON() {
-  const raw  = document.getElementById('inp_dailyImport').value.trim();
-  const msg  = document.getElementById('dailyImportMsg');
-  if (!raw) { msg.style.color = '#f59e0b'; msg.textContent = '데이터를 입력하세요.'; return; }
-
-  const seed = loadNum(KEYS.seed);
-  const defaultShares = loadNum(KEYS.shares);
-  const defaultPool = loadNum(KEYS.pool);
-
-  let arr = [];
-  let isCSV = raw.includes('"') && raw.includes(',') && raw.includes('\n');
-
-  if (isCSV) {
-    // CSV 파싱
-    const lines = raw.split('\n').map(l => l.trim()).filter(l => l);
-    if (lines.length < 2) {
-      msg.style.color = '#ef4444'; msg.textContent = 'CSV는 헤더 + 최소 1개 데이터 행이 필요합니다.'; return;
-    }
-
-    // 헤더 파싱: "날짜","종가" 컬럼 위치 찾기
-    const headerLine = lines[0];
-    const headers = headerLine.split(',').map(h => h.replace(/"/g, '').trim());
-    const dateIdx = headers.findIndex(h => h === '날짜');
-    const priceIdx = headers.findIndex(h => h === '종가');
-
-    if (dateIdx === -1 || priceIdx === -1) {
-      msg.style.color = '#ef4444'; msg.textContent = '"날짜", "종가" 컬럼이 필요합니다.'; return;
-    }
-
-    // 데이터 행 파싱
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(',').map(v => v.replace(/"/g, '').trim());
-      if (values.length <= Math.max(dateIdx, priceIdx)) continue;
-
-      let dateStr = values[dateIdx] || '';
-      let priceStr = values[priceIdx] || '';
-
-      // 날짜 정규화: "2026- 05- 22" → "2026-05-22"
-      dateStr = dateStr.replace(/\s+/g, '');
-      const price = parseFloat(priceStr);
-
-      if (dateStr && !isNaN(price)) {
-        const cycleHist = getCycleForDate(dateStr);
-        arr.push({
-          date: dateStr,
-          price: price,
-          shares: cycleHist ? cycleHist.shares : defaultShares,
-          pool: defaultPool,
-          vlow:  cycleHist ? cycleHist.vlow  : null,
-          vhigh: cycleHist ? cycleHist.vhigh : null,
-        });
-      }
-    }
-  } else {
-    // JSON 파싱
-    try { arr = JSON.parse(raw); } catch {
-      msg.style.color = '#ef4444'; msg.textContent = 'JSON 형식 오류. 다시 확인하세요.'; return;
-    }
-    if (!Array.isArray(arr) || arr.length === 0) {
-      msg.style.color = '#ef4444'; msg.textContent = '배열 형식이 아닙니다.'; return;
-    }
-  }
-
-  let count = 0;
-  for (const item of arr) {
-    if (!item.date || !item.price) continue;
-
-    const cycleHist = getCycleForDate(item.date);
-    const shares = item.shares ?? (cycleHist ? cycleHist.shares : defaultShares);
-    const pool = item.pool ?? defaultPool;
-
-    if (shares == null) continue;
-
-    const evalVal = Math.round(item.price * shares * 100) / 100;
-    const rate = seed > 0 ? Math.round((evalVal + pool - seed) / seed * 10000) / 100 : 0;
-    const cycleInfo = getCycleInfo(load(KEYS.startWeek) || '');
-    addOrUpdateDailyEval({
-      date:      item.date,
-      eval:      evalVal,
-      rate,
-      vlow:  item.vlow  ?? (cycleHist ? cycleHist.vlow  : null),
-      vhigh: item.vhigh ?? (cycleHist ? cycleHist.vhigh : null),
-      cycleWeek: cycleInfo ? cycleInfo.cycleWeek : 0,
-      source:    'imported',
-    });
-    count++;
-  }
-
-  if (count > 0) {
-    autoGistPush();
-    if (activeTab === 'history') renderHistory();
-    msg.style.color = '#22c55e';
-    msg.textContent = `${count}건 임포트 완료`;
-    document.getElementById('inp_dailyImport').value = '';
-  } else {
-    msg.style.color = '#ef4444';
-    msg.textContent = '임포트할 항목이 없습니다. date·price 필드와 현재 shares/pool 설정을 확인하세요.';
-  }
 }
 
 /* ============================================================
@@ -1689,14 +1458,12 @@ function confirmTrade() {
 
   const shares    = loadNum(KEYS.shares);
   const pool      = loadNum(KEYS.pool);
-  const v1        = loadNum(KEYS.v1);
-  const g         = loadNum(KEYS.g) || 10;
   const startWeek = load(KEYS.startWeek) || '';
   const cycleInfo = getCycleInfo(startWeek);
   const cycleWeek = cycleInfo ? cycleInfo.cycleWeek : 0;
 
   const evalSnap  = t.price * (t.type === '매수' ? shares + t.qty : shares - t.qty);
-  const v2    = loadNum(KEYS.v2) || (v1 + pool / g);
+  const v2    = getEffectiveV2();
   const vlow  = v2 * 0.85;
   const vhigh = v2 * 1.15;
 
@@ -1720,14 +1487,6 @@ function confirmTrade() {
   save(KEYS.shares, newShares);
   save(KEYS.pool,   newPool);
 
-  // 거래일 일일 평가금 자동 기록
-  const isoDate = tradeDate2ISO(record.date);
-  if (isoDate) {
-    const seed2 = loadNum(KEYS.seed);
-    const rate2  = seed2 > 0 ? Math.round((evalSnap + newPool - seed2) / seed2 * 10000) / 100 : 0;
-    addOrUpdateDailyEval({ date: isoDate, eval: evalSnap, rate: rate2, cycleWeek, source: 'trade' });
-  }
-
   pendingTrade = null;
   document.getElementById('inp_tradeText').value = '';
   document.getElementById('tradePreview').innerHTML = '';
@@ -1737,6 +1496,7 @@ function confirmTrade() {
   });
   const mfee = document.getElementById('manual_fee'); if (mfee) mfee.value = '0';
 
+  autoGistPush();
   calculateAndRender();
   renderHistory();
 }
@@ -1771,6 +1531,7 @@ function deleteTrade(id) {
   save(KEYS.pool,   newPool);
   saveTrades(trades.filter(x => x.id !== id));
 
+  autoGistPush();
   calculateAndRender();
   renderHistory();
 }
@@ -1783,7 +1544,7 @@ function renderHistory() {
   const curCycle  = cycleInfo ? cycleInfo.cycleWeek : 0;
   const cont      = document.getElementById('historyContent');
 
-  const thisCycle  = trades.filter(t => (t.cycleWeek ?? t.cycleNum) === curCycle);
+  const thisCycle  = trades.filter(t => (t.cycleWeek) === curCycle);
   const buyAmt     = thisCycle.filter(t => t.type === '매수').reduce((s, t) => s + t.amount, 0);
   const sellAmt    = thisCycle.filter(t => t.type === '매도').reduce((s, t) => s + t.amount, 0);
   const net        = buyAmt - sellAmt;
@@ -1797,7 +1558,8 @@ function renderHistory() {
     </div>`;
 
   // Chart
-  if (trades.length > 0) {
+  const hasChartData = loadVHistory().filter(h => h.startPrice != null).length > 0;
+  if (hasChartData) {
     html += `
       <div class="chart-wrap" style="margin-top:0;">
         <div class="chart-label">평가금 추이</div>
@@ -1829,7 +1591,7 @@ function renderHistory() {
           <div class="row" style="margin-bottom:5px;">
             <div style="display:flex; align-items:center; gap:8px;">
               <span style="font-weight:700; color:${col}; font-size:15px;">${t.type}</span>
-              <span class="c-muted" style="font-size:12px;">${t.date} · ${t.cycleWeek ?? t.cycleNum}주차</span>
+              <span class="c-muted" style="font-size:12px;">${t.date} · ${t.cycleWeek}주차</span>
             </div>
             <button onclick="deleteTrade(${t.id})"
               style="background:none; border:1px solid #334155; color:#e2e8f0; border-radius:6px;
@@ -1850,7 +1612,7 @@ function renderHistory() {
 
   cont.innerHTML = html;
 
-  if (trades.length > 0) {
+  if (hasChartData) {
     requestAnimationFrame(() => {
       drawEvalChart(trades);
       drawRateChart(trades);
@@ -1877,14 +1639,6 @@ function drawEvalChart(trades) {
   const P = { top: 12, right: 12, bottom: 28, left: 54 };
   const pw = W - P.left - P.right;
   const ph = H - P.top  - P.bottom;
-
-  // 폴백용 현재 V값
-  const v1   = loadNum(KEYS.v1);
-  const pool = loadNum(KEYS.pool);
-  const g    = loadNum(KEYS.g) || 10;
-  const v2fb = loadNum(KEYS.v2) || (v1 + pool / g);
-  const vlowFb  = v2fb * 0.85;
-  const vhighFb = v2fb * 1.15;
 
   // 사이클 첫날만 표시 (startPrice와 startShares가 있는 항목만)
   const pts = loadVHistory()
@@ -2066,8 +1820,7 @@ function drawRateChart(trades) {
    Cycle rollover (V2 → V1)
    ============================================================ */
 function rolloverCycle() {
-  const snapRaw = load(KEYS.rolloverSnap);
-  const snap    = snapRaw ? (() => { try { return JSON.parse(snapRaw); } catch { return null; } })() : null;
+  const snap = loadJSON(KEYS.rolloverSnap, null);
 
   if (!snap) {
     alert('롤오버 대기 중인 사이클이 없습니다.\n사이클 종료(토요일 06:10 KST) 후 앱을 열면 자동으로 준비됩니다.');
@@ -2153,10 +1906,9 @@ function calculateAndRender() {
   const _lastRoll  = parseInt(load(KEYS.lastRolloverWeek) ?? '-1');
   const _setupAt   = parseInt(load(KEYS.setupAt) || '0');
   const _preSetup  = _ci && _ci.endMs !== undefined && _ci.endMs <= _setupAt;
-  const _snapRaw   = load(KEYS.rolloverSnap);
-  const _snap      = _snapRaw ? (() => { try { return JSON.parse(_snapRaw); } catch { return null; } })() : null;
+  const _snap = loadJSON(KEYS.rolloverSnap, null);
   if (_ci && _ci.isEnded && !_preSetup && _lastRoll !== _curWeek && (!_snap || _snap.fromCycle !== _curWeek)) {
-    const _snapV2 = loadNum(KEYS.v2) > 0 ? loadNum(KEYS.v2) : (v1 + pool / g);
+    const _snapV2 = getEffectiveV2();
     save(KEYS.rolloverSnap, JSON.stringify({ fromCycle: _curWeek, v2: _snapV2, pool, shares }));
   }
 
@@ -2217,7 +1969,7 @@ function calculateAndRender() {
   const cycleInfo = getCycleInfo(startWeek);
   const curCycle  = cycleInfo ? cycleInfo.cycleWeek : 0;
   const basePool  = loadNum(KEYS.cycleStartPool) || pool;
-  const buyUsed   = trades.filter(t => (t.cycleWeek ?? t.cycleNum) === curCycle && t.type === '매수')
+  const buyUsed   = trades.filter(t => (t.cycleWeek) === curCycle && t.type === '매수')
                           .reduce((s, t) => s + t.amount + (t.fee || 0), 0);
   const poolLim   = basePool * 0.75;
   const usedPct   = poolLim > 0 ? Math.min(100, buyUsed / poolLim * 100) : 0;
@@ -2251,7 +2003,7 @@ function calculateAndRender() {
     const banner    = document.getElementById('cycleEndedBanner');
     const doneBox   = document.getElementById('rolloverDoneBox');
     const lastRollover = parseInt(load(KEYS.lastRolloverWeek) ?? '-1');
-    const bSnap     = (() => { try { return JSON.parse(load(KEYS.rolloverSnap) || 'null'); } catch { return null; } })();
+    const bSnap     = loadJSON(KEYS.rolloverSnap, null);
 
     if (bSnap) {
       // 스냅샷 존재 → 롤오버 대기 배너 (언제든 클릭 가능)
@@ -2374,18 +2126,20 @@ async function autoGistPull() {
 
   try {
     const res = await fetch(`https://api.github.com/gists/${gistId}`, {
-      headers: {
-        'Authorization': `token ${pat}`,
-        'Accept': 'application/vnd.github.v3+json',
-      },
+      headers: gistHeaders(pat),
     });
     if (!res.ok) return;
     const json    = await res.json();
     const content = json.files?.['vr_data.json']?.content;
     if (!content) return;
     const data = JSON.parse(content);
+
+    // 로컬이 더 최신이면 덮어쓰지 않음 (push 실패 시 데이터 롤백 방지)
+    const cloudTs = Number(data['_lastModified'] || 0);
+    const localTs = Number(localStorage.getItem('_vr_last_push_ts') || 0);
+    if (localTs > cloudTs) return;
+
     SYNC_KEYS.forEach(k => { if (data[k] !== undefined) localStorage.setItem(k, data[k]); });
-    // 헤더에 잠깐 표시
     showSyncBadge('↓ 클라우드 동기화 완료');
   } catch (_) { /* 네트워크 오류 무시 — 로컬 데이터로 계속 */ }
 }
@@ -2394,23 +2148,21 @@ async function autoGistPull() {
 async function autoGistPush() {
   const pat    = load(KEYS.githubPat);
   const gistId = load(KEYS.gistId);
-  if (!pat || !gistId) return; // 동기화 미설정 기기는 무시
+  if (!pat || !gistId) return;
 
   const data = {};
   SYNC_KEYS.forEach(k => { const v = localStorage.getItem(k); if (v !== null) data[k] = v; });
+  data['_lastModified'] = String(Date.now());
 
   try {
-    await fetch(`https://api.github.com/gists/${gistId}`, {
+    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
       method: 'PATCH',
-      headers: {
-        'Authorization': `token ${pat}`,
-        'Accept': 'application/vnd.github.v3+json',
-        'Content-Type': 'application/json',
-      },
+      headers: gistHeaders(pat),
       body: JSON.stringify({
         files: { 'vr_data.json': { content: JSON.stringify(data, null, 2) } },
       }),
     });
+    if (res.ok) localStorage.setItem('_vr_last_push_ts', String(Date.now()));
   } catch (_) { /* 네트워크 오류 무시 */ }
 }
 
@@ -2435,38 +2187,32 @@ async function gistSave() {
   // 동기화 대상 데이터 수집
   const data = {};
   SYNC_KEYS.forEach(k => { const v = localStorage.getItem(k); if (v !== null) data[k] = v; });
+  data['_lastModified'] = String(Date.now());
 
   const body = {
     description: 'VR Dashboard Data',
     public: false,
     files: { 'vr_data.json': { content: JSON.stringify(data, null, 2) } },
   };
-  const headers = {
-    'Authorization': `token ${pat}`,
-    'Accept': 'application/vnd.github.v3+json',
-    'Content-Type': 'application/json',
-  };
 
   try {
     syncStatusMsg('저장 중…', '#60a5fa');
     let res, json;
     if (gistId) {
-      // 기존 Gist 업데이트
-      res  = await fetch(`https://api.github.com/gists/${gistId}`, { method: 'PATCH', headers, body: JSON.stringify(body) });
+      res  = await fetch(`https://api.github.com/gists/${gistId}`, { method: 'PATCH', headers: gistHeaders(pat), body: JSON.stringify(body) });
     } else {
-      // 새 Gist 생성
-      res  = await fetch('https://api.github.com/gists', { method: 'POST', headers, body: JSON.stringify(body) });
+      res  = await fetch('https://api.github.com/gists', { method: 'POST', headers: gistHeaders(pat), body: JSON.stringify(body) });
     }
     json = await res.json();
     if (!res.ok) {
       syncStatusMsg(`오류: ${json.message || res.status}`, '#ef4444');
       return;
     }
-    // 새로 생성된 경우 ID 저장 & 화면 반영
     if (!gistId && json.id) {
       save(KEYS.gistId, json.id);
       document.getElementById('edit_gistId').value = json.id;
     }
+    localStorage.setItem('_vr_last_push_ts', String(Date.now()));
     syncStatusMsg('✓ 저장 완료 · ' + new Date().toLocaleTimeString('ko-KR', { hour:'2-digit', minute:'2-digit' }), '#22c55e');
   } catch (e) {
     syncStatusMsg('네트워크 오류: ' + e.message, '#ef4444');
@@ -2483,7 +2229,7 @@ async function gistLoad() {
   try {
     syncStatusMsg('불러오는 중…', '#60a5fa');
     const res = await fetch(`https://api.github.com/gists/${gistId}`, {
-      headers: { 'Authorization': `token ${pat}`, 'Accept': 'application/vnd.github.v3+json' },
+      headers: gistHeaders(pat),
     });
     const json = await res.json();
     if (!res.ok) { syncStatusMsg(`오류: ${json.message || res.status}`, '#ef4444'); return; }
@@ -2584,22 +2330,21 @@ async function confirmVrPending(idx) {
 
   const shares    = loadNum(KEYS.shares);
   const pool      = loadNum(KEYS.pool);
-  const v1        = loadNum(KEYS.v1);
-  const g         = loadNum(KEYS.g) || 10;
   const startWeek = load(KEYS.startWeek) || '';
   const cycleInfo = getCycleInfo(startWeek);
   const cycleWeek = cycleInfo ? cycleInfo.cycleWeek : 0;
-  const v2        = loadNum(KEYS.v2) || (v1 + pool / g);
+  const v2        = getEffectiveV2();
   const vlow      = v2 * 0.85;
   const vhigh     = v2 * 1.15;
+  const fee       = t.fee || 0;
   const newShares = t.type === '매수' ? shares + t.qty : shares - t.qty;
-  const newPool   = t.type === '매수' ? pool - t.amount : pool + t.amount;
+  const newPool   = t.type === '매수' ? pool - t.amount - fee : pool + t.amount - fee;
   const evalSnap  = t.price * newShares;
 
   const record = {
     id: Date.now(), timestamp: Date.now(),
     date: t.date, type: t.type,
-    price: t.price, qty: t.qty, amount: t.amount, fee: 0,
+    price: t.price, qty: t.qty, amount: t.amount, fee,
     sharesAfter: newShares, poolAfter: newPool,
     cycleWeek,
     v2snap: v2, vlowSnap: vlow, vhighSnap: vhigh, evalSnap,
@@ -2632,7 +2377,7 @@ async function clearVrPendingGist() {
   try {
     await fetch(`https://api.github.com/gists/${gistId}`, {
       method: 'PATCH',
-      headers: { Authorization: `token ${pat}`, 'Content-Type': 'application/json' },
+      headers: gistHeaders(pat),
       body: JSON.stringify({ files: { 'vr_pending.json': { content: remaining } } })
     });
   } catch (_) {}
@@ -2646,7 +2391,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   if (hasSetup()) {
     showDashboard();
-    autoBackfill(); // 빠진 날짜 일일 평가금 자동 백필 (백그라운드)
   } else {
     document.getElementById('setupScreen').classList.remove('hidden');
   }
