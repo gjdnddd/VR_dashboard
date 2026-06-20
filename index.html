@@ -1882,15 +1882,18 @@ function rolloverCycle() {
   localStorage.removeItem(KEYS.v2);
   localStorage.removeItem(KEYS.rolloverSnap);
 
-  const snapG    = loadNum(KEYS.g) || 10;
-  const snapV2new = snapV2 + snapPool / snapG + (currentPrice * snapShares - snapV2) / (2 * Math.sqrt(snapG));
+  // cycleSnapshot은 롤오버 순간의 실제 pool/shares 사용 (snap의 stale 값 아님)
+  const snapG      = loadNum(KEYS.g) || 10;
+  const actualPool = loadNum(KEYS.pool);
+  const actualSh   = loadNum(KEYS.shares);
+  const snapV2new  = snapV2 + actualPool / snapG + (currentPrice * actualSh - snapV2) / (2 * Math.sqrt(snapG));
   save(KEYS.cycleSnapshot, JSON.stringify({
     cycleWeek:  fromCycle + 2,
     v2:         snapV2new,
     vlow:       snapV2new * 0.85,
     vhigh:      snapV2new * 1.15,
-    shares:     snapShares,
-    pool:       snapPool,
+    shares:     actualSh,
+    pool:       actualPool,
     startPrice: currentPrice,
   }));
   snapshotMode = false;
@@ -1919,29 +1922,38 @@ function switchTab(tab) {
    Core calculation & render
    ============================================================ */
 function calculateAndRender() {
-  // cycleSnapshot 복원 / 검증 (구 공식으로 저장된 경우 재계산)
+  // cycleSnapshot 복원 / 검증
   {
     let csnap = loadJSON(KEYS.cycleSnapshot, null);
-    // v2 ≈ vhigh/1.15 이면 구 공식(snapV2=새V1)으로 저장된 것 → 삭제 후 재복원
+    // 구 공식(v2 ≈ vhigh/1.15)으로 저장된 경우 삭제
     if (csnap && Math.abs(csnap.v2 - csnap.vhigh / 1.15) < 0.01) {
-      localStorage.removeItem(KEYS.cycleSnapshot);
-      csnap = null;
+      localStorage.removeItem(KEYS.cycleSnapshot); csnap = null;
+    }
+    // 새 사이클 거래 없는데 pool/shares가 현재와 다르면 stale → 삭제
+    if (csnap) {
+      const curPool = parseFloat(localStorage.getItem(KEYS.pool)) || 0;
+      const curSh   = parseFloat(localStorage.getItem(KEYS.shares)) || 0;
+      const newCycleTrades = (loadJSON(KEYS.trades, []) || []).filter(t => t.cycleWeek === csnap.cycleWeek);
+      if (newCycleTrades.length === 0 && (Math.abs(csnap.pool - curPool) > 0.5 || Math.abs(csnap.shares - curSh) > 0.5)) {
+        localStorage.removeItem(KEYS.cycleSnapshot); csnap = null;
+      }
     }
     if (!csnap) {
       const vh = loadVHistory();
       const latest = vh.length ? vh[vh.length - 1] : null;
       if (latest && latest.startPrice) {
-        const rv1 = parseFloat(localStorage.getItem(KEYS.v1)) || 0;
-        const rg  = parseFloat(localStorage.getItem(KEYS.g))  || 10;
-        const rsh = latest.startShares ?? latest.shares;
-        const rv2 = rv1 + latest.startPool / rg + (latest.startPrice * rsh - rv1) / (2 * Math.sqrt(rg));
+        const rv1   = parseFloat(localStorage.getItem(KEYS.v1))     || 0;
+        const rg    = parseFloat(localStorage.getItem(KEYS.g))      || 10;
+        const rpool = parseFloat(localStorage.getItem(KEYS.pool))   || 0;
+        const rsh   = parseFloat(localStorage.getItem(KEYS.shares)) || 0;
+        const rv2   = rv1 + rpool / rg + (latest.startPrice * rsh - rv1) / (2 * Math.sqrt(rg));
         save(KEYS.cycleSnapshot, JSON.stringify({
           cycleWeek:  latest.cycleWeek,
           v2:         rv2,
           vlow:       rv2 * 0.85,
           vhigh:      rv2 * 1.15,
           shares:     rsh,
-          pool:       latest.startPool,
+          pool:       rpool,
           startPrice: latest.startPrice,
         }));
       }
