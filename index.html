@@ -1917,6 +1917,23 @@ function switchTab(tab) {
    Core calculation & render
    ============================================================ */
 function calculateAndRender() {
+  // cycleSnapshot이 없으면 vHistory 최신 항목으로 자동 복원
+  if (!loadJSON(KEYS.cycleSnapshot, null)) {
+    const vh = loadVHistory();
+    const latest = vh.length ? vh[vh.length - 1] : null;
+    if (latest && latest.startPrice) {
+      save(KEYS.cycleSnapshot, JSON.stringify({
+        cycleWeek:  latest.cycleWeek,
+        v2:         latest.vhigh / 1.15,
+        vlow:       latest.vlow,
+        vhigh:      latest.vhigh,
+        shares:     latest.startShares ?? latest.shares,
+        pool:       latest.startPool,
+        startPrice: latest.startPrice,
+      }));
+    }
+  }
+
   let v1          = loadNum(KEYS.v1);
   const shares    = loadNum(KEYS.shares);
   const pool      = loadNum(KEYS.pool);
