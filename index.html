@@ -409,6 +409,7 @@
 
   <!-- ══ Tab: 메인 ══ -->
   <div id="tabMain" class="page-content">
+    <div id="snapBarMain" style="display:none;"></div>
 
     <div class="card">
       <div class="row" style="margin-bottom:10px;">
@@ -520,16 +521,19 @@
 
   <!-- ══ Tab: 매수 ══ -->
   <div id="tabBuy" class="page-content hidden">
+    <div id="snapBarBuy" style="display:none;"></div>
     <div id="buyContent"><div class="table-empty">현재가 로딩 후 표시됩니다</div></div>
   </div>
 
   <!-- ══ Tab: 매도 ══ -->
   <div id="tabSell" class="page-content hidden">
+    <div id="snapBarSell" style="display:none;"></div>
     <div id="sellContent"><div class="table-empty">현재가 로딩 후 표시됩니다</div></div>
   </div>
 
   <!-- ══ Tab: 검증 ══ -->
   <div id="tabVerify" class="page-content hidden">
+    <div id="snapBarVerify" style="display:none;"></div>
     <div style="margin:12px 14px 0; background:#1e293b; border-radius:10px; padding:12px 14px; border:1px solid #334155;">
       <div style="font-size:11px; color:#e2e8f0; text-transform:uppercase; letter-spacing:.06em; font-weight:600; margin-bottom:10px;">단위수량</div>
       <div style="display:flex; gap:20px;">
@@ -763,12 +767,13 @@ const KEYS = {
   v2ForCycle:       'vr_v2_for_cycle',
   vHistory:         'vr_v_history',
   rolloverSnap:     'vr_rollover_snap',
+  cycleSnapshot:    'vr_cycle_snapshot',
 };
 
 // 클라우드 동기화 대상 키 (PAT·GistID는 제외 — 기기마다 따로 관리)
 const SYNC_KEYS = ['vr_v1','vr_shares','vr_pool','vr_g','vr_start_week',
                    'vr_unit_qty','vr_seed','vr_trades','vr_cycle_start_pool','vr_last_rollover_week',
-                   'vr_v2','vr_v2_for_cycle','vr_v_history','vr_rollover_snap'];
+                   'vr_v2','vr_v2_for_cycle','vr_v_history','vr_rollover_snap','vr_cycle_snapshot'];
 
 const save    = (k, v) => localStorage.setItem(k, String(v));
 const load    = (k)    => localStorage.getItem(k);
@@ -929,9 +934,18 @@ function fmtDate(d) {
 // 여기에 본인의 Finnhub API Key를 입력하세요
 const FINNHUB_KEY = 'd7pk061r01qlb0aa98bgd7pk061r01qlb0aa98c0'; 
 
-let currentPrice = null;
-let buyUnit  = null; 
-let sellUnit = null;
+let currentPrice  = null;
+let buyUnit       = null;
+let sellUnit      = null;
+let snapshotMode  = false;
+
+function toggleSnapshot() {
+  const snap = loadJSON(KEYS.cycleSnapshot, null);
+  if (!snap) return;
+  snapshotMode = !snapshotMode;
+  calculateAndRender();
+  if (activeTab === 'verify' && document.getElementById('verifyResult').innerHTML.trim()) parseAndVerify();
+}
 
 async function fetchPrice() {
   setUI('loading');
@@ -1223,23 +1237,27 @@ function parseAndVerify() {
     resultEl.innerHTML = '<div class="parse-error">파싱된 주문이 없습니다.<br>엑셀 예약주문 화면에서 복사한 데이터를 붙여넣어 주세요.</div>';
     return;
   }
-  if (!currentPrice) {
+  const cycleSnap2 = loadJSON(KEYS.cycleSnapshot, null);
+  const useSnap    = snapshotMode && cycleSnap2;
+  const refPrice   = useSnap ? cycleSnap2.startPrice : currentPrice;
+
+  if (!refPrice) {
     resultEl.innerHTML = '<div class="parse-error">현재가를 먼저 입력해주세요.</div>';
     return;
   }
 
-  const shares  = loadNum(KEYS.shares);
-  const pool    = loadNum(KEYS.pool);
+  const shares  = useSnap ? cycleSnap2.shares : loadNum(KEYS.shares);
+  const pool    = useSnap ? cycleSnap2.pool   : loadNum(KEYS.pool);
   const unitQty = loadNum(KEYS.unitQty) || 1;
-  const v2    = getEffectiveV2();
-  const vlow  = v2 * 0.85;
-  const vhigh = v2 * 1.15;
+  const v2eff   = useSnap ? cycleSnap2.v2     : getEffectiveV2();
+  const vlow    = useSnap ? cycleSnap2.vlow   : v2eff * 0.85;
+  const vhigh   = useSnap ? cycleSnap2.vhigh  : v2eff * 1.15;
 
   const effectiveBuyUnit  = buyUnit  !== null ? buyUnit  : unitQty;
   const effectiveSellUnit = sellUnit !== null ? sellUnit : unitQty;
 
-  const buyRows  = runBuySimulation(currentPrice, shares, vlow, pool, effectiveBuyUnit);
-  const sellRows = runSellSimulation(currentPrice, shares, vhigh, effectiveSellUnit);
+  const buyRows  = runBuySimulation(refPrice, shares, vlow, pool, effectiveBuyUnit);
+  const sellRows = runSellSimulation(refPrice, shares, vhigh, effectiveSellUnit);
 
   const buyOrders  = orders.filter(o => o.type === '매수');
   const sellOrders = orders.filter(o => o.type === '매도');
@@ -1864,6 +1882,17 @@ function rolloverCycle() {
   localStorage.removeItem(KEYS.v2);
   localStorage.removeItem(KEYS.rolloverSnap);
 
+  save(KEYS.cycleSnapshot, JSON.stringify({
+    cycleWeek:  fromCycle + 2,
+    v2:         snapV2,
+    vlow:       nextVlow,
+    vhigh:      nextVhigh,
+    shares:     snapShares,
+    pool:       snapPool,
+    startPrice: currentPrice,
+  }));
+  snapshotMode = false;
+
   autoGistPush();
   calculateAndRender();
 }
@@ -2026,8 +2055,62 @@ function calculateAndRender() {
   // ── Buy / Sell tables ──
   const effectiveBuyUnit  = buyUnit  !== null ? buyUnit  : unitQty;
   const effectiveSellUnit = sellUnit !== null ? sellUnit : unitQty;
-  renderBuyTable(currentPrice, shares, vlow, pool, effectiveBuyUnit);
-  renderSellTable(currentPrice, shares, vhigh, effectiveSellUnit);
+
+  // ── Cycle snapshot bars ──
+  const cycleSnap = loadJSON(KEYS.cycleSnapshot, null);
+  const snapBarInner = cycleSnap
+    ? (snapshotMode
+        ? `<div style="display:flex;align-items:center;justify-content:space-between;background:#1e1b4b;border:1px solid #3730a3;border-radius:8px;padding:8px 12px;margin:10px 14px 0;font-size:12px;">
+             <span style="color:#a5b4fc;">📸 ${cycleSnap.cycleWeek}주차 사이클 시작 기준</span>
+             <button onclick="toggleSnapshot()" style="background:none;border:1px solid #4338ca;color:#c7d2fe;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;">× 현재로</button>
+           </div>`
+        : `<div style="display:flex;justify-content:flex-end;padding:6px 14px 0;">
+             <button onclick="toggleSnapshot()" style="background:#1e1b4b;border:1px solid #3730a3;color:#a5b4fc;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">📸 스냅샷 보기</button>
+           </div>`)
+    : '';
+  ['Main','Buy','Sell','Verify'].forEach(t => {
+    const el = document.getElementById(`snapBar${t}`);
+    if (!el) return;
+    el.style.display = cycleSnap ? 'block' : 'none';
+    el.innerHTML = snapBarInner;
+  });
+
+  if (snapshotMode && cycleSnap) {
+    const sp = cycleSnap;
+    const snapEval = sp.startPrice * sp.shares;
+
+    const priceEl = document.getElementById('currentPrice');
+    if (priceEl) priceEl.textContent = `$${sp.startPrice.toFixed(2)}`;
+    document.getElementById('v2Value').textContent       = fmt(sp.v2);
+    document.getElementById('vlowValue').textContent     = fmt(sp.vlow);
+    document.getElementById('vhighValue').textContent    = fmt(sp.vhigh);
+    document.getElementById('sharesDisplay').textContent = `${sp.shares}주`;
+    document.getElementById('poolRemain').textContent    = fmt(sp.pool);
+    document.getElementById('poolLimit').textContent     = fmt(sp.pool * 0.75);
+
+    const evalEl2   = document.getElementById('evalAmount');
+    const statusEl2 = document.getElementById('evalStatus');
+    evalEl2.textContent = fmt(snapEval);
+    if      (snapEval < sp.vlow)  { evalEl2.className = 'metric-value c-green'; statusEl2.textContent = '매수 구간'; statusEl2.className = 'badge badge-buy'; }
+    else if (snapEval > sp.vhigh) { evalEl2.className = 'metric-value c-red';   statusEl2.textContent = '매도 구간'; statusEl2.className = 'badge badge-sell'; }
+    else                          { evalEl2.className = 'metric-value c-blue';   statusEl2.textContent = '밴드 내';   statusEl2.className = 'badge badge-band'; }
+
+    const seed2      = loadNum(KEYS.seed);
+    const total2     = snapEval + sp.pool;
+    document.getElementById('totalAsset').textContent = fmt(total2);
+    if (seed2 > 0) {
+      const rate2 = (total2 - seed2) / seed2 * 100;
+      const rateEl2 = document.getElementById('returnRate');
+      rateEl2.textContent = (rate2 >= 0 ? '+' : '') + rate2.toFixed(2) + '%';
+      rateEl2.className   = 'metric-value ' + (rate2 >= 0 ? 'c-green' : 'c-red');
+    }
+
+    renderBuyTable(sp.startPrice, sp.shares, sp.vlow, sp.pool, effectiveBuyUnit);
+    renderSellTable(sp.startPrice, sp.shares, sp.vhigh, effectiveSellUnit);
+  } else {
+    renderBuyTable(currentPrice, shares, vlow, pool, effectiveBuyUnit);
+    renderSellTable(currentPrice, shares, vhigh, effectiveSellUnit);
+  }
 
   // ── History tab (if open) ──
   if (activeTab === 'history') renderHistory();
