@@ -947,6 +947,30 @@ function toggleSnapshot() {
   if (activeTab === 'verify' && document.getElementById('verifyResult').innerHTML.trim()) parseAndVerify();
 }
 
+function saveSnapshot() {
+  const v2  = getEffectiveV2();
+  const pool = loadNum(KEYS.pool);
+  const sh   = loadNum(KEYS.shares);
+  const ci   = getCycleInfo(load(KEYS.startWeek) || '');
+  const cw   = ci ? ci.cycleWeek : 0;
+  const existing = loadJSON(KEYS.cycleSnapshot, null);
+  const sp   = currentPrice ?? existing?.startPrice ?? null;
+  if (!sp) { alert('현재가를 먼저 입력하세요.'); return; }
+  if (!confirm(`현재값으로 스냅샷을 저장하시겠습니까?\nV2: ${fmtAmt(v2)} / Pool: ${fmtAmt(pool)} / 주식수: ${sh}주`)) return;
+  save(KEYS.cycleSnapshot, JSON.stringify({
+    cycleWeek:  cw,
+    v2,
+    vlow:       v2 * 0.85,
+    vhigh:      v2 * 1.15,
+    shares:     sh,
+    pool,
+    startPrice: sp,
+  }));
+  snapshotMode = false;
+  autoGistPush();
+  calculateAndRender();
+}
+
 async function fetchPrice() {
   setUI('loading');
   
@@ -1922,44 +1946,6 @@ function switchTab(tab) {
    Core calculation & render
    ============================================================ */
 function calculateAndRender() {
-  // cycleSnapshot 복원 / 검증
-  {
-    let csnap = loadJSON(KEYS.cycleSnapshot, null);
-    // 구 공식(v2 ≈ vhigh/1.15)으로 저장된 경우 삭제
-    if (csnap && Math.abs(csnap.v2 - csnap.vhigh / 1.15) < 0.01) {
-      localStorage.removeItem(KEYS.cycleSnapshot); csnap = null;
-    }
-    // 새 사이클 거래 없는데 pool/shares가 현재와 다르면 stale → 삭제
-    if (csnap) {
-      const curPool = parseFloat(localStorage.getItem(KEYS.pool)) || 0;
-      const curSh   = parseFloat(localStorage.getItem(KEYS.shares)) || 0;
-      const newCycleTrades = (loadJSON(KEYS.trades, []) || []).filter(t => t.cycleWeek === csnap.cycleWeek);
-      if (newCycleTrades.length === 0 && (Math.abs(csnap.pool - curPool) > 0.5 || Math.abs(csnap.shares - curSh) > 0.5)) {
-        localStorage.removeItem(KEYS.cycleSnapshot); csnap = null;
-      }
-    }
-    if (!csnap) {
-      const vh = loadVHistory();
-      const latest = vh.length ? vh[vh.length - 1] : null;
-      if (latest && latest.startPrice) {
-        const rv1   = parseFloat(localStorage.getItem(KEYS.v1))     || 0;
-        const rg    = parseFloat(localStorage.getItem(KEYS.g))      || 10;
-        const rpool = parseFloat(localStorage.getItem(KEYS.pool))   || 0;
-        const rsh   = parseFloat(localStorage.getItem(KEYS.shares)) || 0;
-        const rv2   = rv1 + rpool / rg + (latest.startPrice * rsh - rv1) / (2 * Math.sqrt(rg));
-        save(KEYS.cycleSnapshot, JSON.stringify({
-          cycleWeek:  latest.cycleWeek,
-          v2:         rv2,
-          vlow:       rv2 * 0.85,
-          vhigh:      rv2 * 1.15,
-          shares:     rsh,
-          pool:       rpool,
-          startPrice: latest.startPrice,
-        }));
-      }
-    }
-  }
-
   let v1          = loadNum(KEYS.v1);
   const shares    = loadNum(KEYS.shares);
   const pool      = loadNum(KEYS.pool);
@@ -2101,20 +2087,19 @@ function calculateAndRender() {
 
   // ── Cycle snapshot bars ──
   const cycleSnap = loadJSON(KEYS.cycleSnapshot, null);
-  const snapBarInner = cycleSnap
-    ? (snapshotMode
-        ? `<div style="display:flex;align-items:center;justify-content:space-between;background:#1e1b4b;border:1px solid #3730a3;border-radius:8px;padding:8px 12px;margin:10px 14px 0;font-size:12px;">
-             <span style="color:#a5b4fc;">📸 ${cycleSnap.cycleWeek}주차 사이클 시작 기준</span>
-             <button onclick="toggleSnapshot()" style="background:none;border:1px solid #4338ca;color:#c7d2fe;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;">× 현재로</button>
-           </div>`
-        : `<div style="display:flex;justify-content:flex-end;padding:6px 14px 0;">
-             <button onclick="toggleSnapshot()" style="background:#1e1b4b;border:1px solid #3730a3;color:#a5b4fc;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">📸 스냅샷 보기</button>
-           </div>`)
-    : '';
+  const snapBarInner = (snapshotMode && cycleSnap)
+    ? `<div style="display:flex;align-items:center;justify-content:space-between;background:#1e1b4b;border:1px solid #3730a3;border-radius:8px;padding:8px 12px;margin:10px 14px 0;font-size:12px;">
+         <span style="color:#a5b4fc;">📸 ${cycleSnap.cycleWeek}주차 사이클 시작 기준</span>
+         <button onclick="toggleSnapshot()" style="background:none;border:1px solid #4338ca;color:#c7d2fe;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;">× 현재로</button>
+       </div>`
+    : `<div style="display:flex;justify-content:flex-end;gap:6px;padding:6px 14px 0;">
+         <button onclick="saveSnapshot()" style="background:#0c2231;border:1px solid #0e7490;color:#7dd3fc;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">💾 스냅샷 저장</button>
+         ${cycleSnap ? `<button onclick="toggleSnapshot()" style="background:#1e1b4b;border:1px solid #3730a3;color:#a5b4fc;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">📸 스냅샷 보기</button>` : ''}
+       </div>`;
   ['Main','Buy','Sell','Verify'].forEach(t => {
     const el = document.getElementById(`snapBar${t}`);
     if (!el) return;
-    el.style.display = cycleSnap ? 'block' : 'none';
+    el.style.display = 'block';
     el.innerHTML = snapBarInner;
   });
 
