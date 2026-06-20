@@ -1882,11 +1882,13 @@ function rolloverCycle() {
   localStorage.removeItem(KEYS.v2);
   localStorage.removeItem(KEYS.rolloverSnap);
 
+  const snapG    = loadNum(KEYS.g) || 10;
+  const snapV2new = snapV2 + snapPool / snapG + (currentPrice * snapShares - snapV2) / (2 * Math.sqrt(snapG));
   save(KEYS.cycleSnapshot, JSON.stringify({
     cycleWeek:  fromCycle + 2,
-    v2:         snapV2,
-    vlow:       nextVlow,
-    vhigh:      nextVhigh,
+    v2:         snapV2new,
+    vlow:       snapV2new * 0.85,
+    vhigh:      snapV2new * 1.15,
     shares:     snapShares,
     pool:       snapPool,
     startPrice: currentPrice,
@@ -1917,20 +1919,32 @@ function switchTab(tab) {
    Core calculation & render
    ============================================================ */
 function calculateAndRender() {
-  // cycleSnapshot이 없으면 vHistory 최신 항목으로 자동 복원
-  if (!loadJSON(KEYS.cycleSnapshot, null)) {
-    const vh = loadVHistory();
-    const latest = vh.length ? vh[vh.length - 1] : null;
-    if (latest && latest.startPrice) {
-      save(KEYS.cycleSnapshot, JSON.stringify({
-        cycleWeek:  latest.cycleWeek,
-        v2:         latest.vhigh / 1.15,
-        vlow:       latest.vlow,
-        vhigh:      latest.vhigh,
-        shares:     latest.startShares ?? latest.shares,
-        pool:       latest.startPool,
-        startPrice: latest.startPrice,
-      }));
+  // cycleSnapshot 복원 / 검증 (구 공식으로 저장된 경우 재계산)
+  {
+    let csnap = loadJSON(KEYS.cycleSnapshot, null);
+    // v2 ≈ vhigh/1.15 이면 구 공식(snapV2=새V1)으로 저장된 것 → 삭제 후 재복원
+    if (csnap && Math.abs(csnap.v2 - csnap.vhigh / 1.15) < 0.01) {
+      localStorage.removeItem(KEYS.cycleSnapshot);
+      csnap = null;
+    }
+    if (!csnap) {
+      const vh = loadVHistory();
+      const latest = vh.length ? vh[vh.length - 1] : null;
+      if (latest && latest.startPrice) {
+        const rv1 = parseFloat(localStorage.getItem(KEYS.v1)) || 0;
+        const rg  = parseFloat(localStorage.getItem(KEYS.g))  || 10;
+        const rsh = latest.startShares ?? latest.shares;
+        const rv2 = rv1 + latest.startPool / rg + (latest.startPrice * rsh - rv1) / (2 * Math.sqrt(rg));
+        save(KEYS.cycleSnapshot, JSON.stringify({
+          cycleWeek:  latest.cycleWeek,
+          v2:         rv2,
+          vlow:       rv2 * 0.85,
+          vhigh:      rv2 * 1.15,
+          shares:     rsh,
+          pool:       latest.startPool,
+          startPrice: latest.startPrice,
+        }));
+      }
     }
   }
 
