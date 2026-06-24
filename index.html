@@ -2429,8 +2429,8 @@ function renderVrPending() {
         <div style="font-size:12px;"><div style="color:#e2e8f0; margin-bottom:2px;">금액</div><div style="color:#e2e8f0;">$${(t.amount||0).toFixed(2)}</div></div>
       </div>
       <div style="display:flex; gap:6px;">
-        <button onclick="ignoreVrPending(${t.id})" style="flex:1; padding:9px; background:#1e293b; border:1px solid #334155; border-radius:7px; color:#f1f5f9; font-size:13px; cursor:pointer;">무시</button>
-        <button onclick="confirmVrPending(${t.id})" style="flex:2; padding:9px; background:#3730a3; border:none; border-radius:7px; color:#c7d2fe; font-size:13px; font-weight:600; cursor:pointer;">VR에 반영</button>
+        <button onclick="ignoreVrPending('${t.id}')" style="flex:1; padding:9px; background:#1e293b; border:1px solid #334155; border-radius:7px; color:#f1f5f9; font-size:13px; cursor:pointer;">무시</button>
+        <button onclick="confirmVrPending('${t.id}')" style="flex:2; padding:9px; background:#3730a3; border:none; border-radius:7px; color:#c7d2fe; font-size:13px; font-weight:600; cursor:pointer;">VR에 반영</button>
       </div>
     </div>`).join('');
 }
