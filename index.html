@@ -1874,9 +1874,16 @@ function rolloverCycle() {
     return;
   }
 
-  const { fromCycle, v2: snapV2, pool: snapPool, shares: snapShares } = snap;
+  const { fromCycle } = snap;
 
-  if (!confirm(`${fromCycle}주차 → ${fromCycle + 2}주차 롤오버\nV1: ${fmtAmt(snapV2)} / Pool: ${fmtAmt(snapPool)}\n계속하시겠습니까?`)) return;
+  // 롤오버 계산은 항상 클릭 시점의 실제 값 사용 (감지 시점에 얼어붙은 stale snap 값 아님)
+  const v1     = loadNum(KEYS.v1);       // a — 이번 사이클 V1 (사이클 내내 불변)
+  const g      = loadNum(KEYS.g) || 10;
+  const pool   = loadNum(KEYS.pool);     // 실시간 pool
+  const shares = loadNum(KEYS.shares);   // 실시간 주식수
+  const newV1  = v1 + pool / g + (currentPrice * shares - v1) / (2 * Math.sqrt(g));  // b
+
+  if (!confirm(`${fromCycle}주차 → ${fromCycle + 2}주차 롤오버\nV1: ${fmtAmt(newV1)} / Pool: ${fmtAmt(pool)}\n계속하시겠습니까?`)) return;
 
   // 다음 사이클 시작일: 초기 startWeek 기준 + (fromCycle+2)/2 × 14일
   const sw = load(KEYS.startWeek) || '';
@@ -1885,39 +1892,36 @@ function rolloverCycle() {
   const nextMon  = new Date(startMon);
   nextMon.setUTCDate(startMon.getUTCDate() + ((fromCycle + 2) / 2) * 14);
 
-  const nextVlow  = Math.round(snapV2 * 0.85);
-  const nextVhigh = Math.round(snapV2 * 1.15);
+  const nextVlow  = Math.round(newV1 * 0.85);
+  const nextVhigh = Math.round(newV1 * 1.15);
 
   addOrUpdateVHistory({
     cycleWeek:   fromCycle + 2,
     startDate:   nextMon.toISOString().slice(0, 10),
     vlow:        nextVlow,
     vhigh:       nextVhigh,
-    shares:      snapShares,
-    startShares: snapShares,
-    startPool:   snapPool,
+    shares:      shares,
+    startShares: shares,
+    startPool:   pool,
     startPrice:  currentPrice,
   });
 
-  save(KEYS.v1,               snapV2);
-  save(KEYS.cycleStartPool,   snapPool);
+  save(KEYS.v1,               newV1);
+  save(KEYS.cycleStartPool,   pool);
   save(KEYS.lastRolloverWeek, fromCycle);
   localStorage.removeItem(KEYS.v2ForCycle);
   localStorage.removeItem(KEYS.v2);
   localStorage.removeItem(KEYS.rolloverSnap);
 
-  // cycleSnapshot은 롤오버 순간의 실제 pool/shares 사용 (snap의 stale 값 아님)
-  const snapG      = loadNum(KEYS.g) || 10;
-  const actualPool = loadNum(KEYS.pool);
-  const actualSh   = loadNum(KEYS.shares);
-  const snapV2new  = snapV2 + actualPool / snapG + (currentPrice * actualSh - snapV2) / (2 * Math.sqrt(snapG));
+  // cycleSnapshot: 새 사이클 시작 시점 V2 (새 V1=newV1 기준, 같은 시점 pool/shares/가격으로 1회 계산)
+  const snapV2new = newV1 + pool / g + (currentPrice * shares - newV1) / (2 * Math.sqrt(g));
   save(KEYS.cycleSnapshot, JSON.stringify({
     cycleWeek:  fromCycle + 2,
     v2:         snapV2new,
     vlow:       snapV2new * 0.85,
     vhigh:      snapV2new * 1.15,
-    shares:     actualSh,
-    pool:       actualPool,
+    shares:     shares,
+    pool:       pool,
     startPrice: currentPrice,
   }));
   snapshotMode = false;
@@ -2065,8 +2069,11 @@ function calculateAndRender() {
 
     if (bSnap) {
       // 스냅샷 존재 → 롤오버 대기 배너 (언제든 클릭 가능)
+      // 미리보기는 실제 롤오버 계산과 동일하게 실시간 값으로 계산 (stale snap 값 아님)
+      const previewV1   = currentPrice !== null ? (v1 + pool / g + (currentPrice * shares - v1) / (2 * Math.sqrt(g))) : bSnap.v2;
+      const previewPool = currentPrice !== null ? pool : bSnap.pool;
       document.getElementById('rolloverSubText').textContent =
-        `${bSnap.fromCycle}주차 종료 · V1: ${fmtAmt(bSnap.v2)} / Pool: ${fmtAmt(bSnap.pool)}`;
+        `${bSnap.fromCycle}주차 종료 · V1: ${fmtAmt(previewV1)} / Pool: ${fmtAmt(previewPool)}`;
       banner.classList.remove('hidden');
       doneBox.classList.add('hidden');
     } else if (c.isEnded && lastRollover === c.cycleWeek) {
