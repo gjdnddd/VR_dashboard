@@ -1913,13 +1913,12 @@ function rolloverCycle() {
   localStorage.removeItem(KEYS.v2);
   localStorage.removeItem(KEYS.rolloverSnap);
 
-  // cycleSnapshot: 새 사이클 시작 시점 V2 (새 V1=newV1 기준, 같은 시점 pool/shares/가격으로 1회 계산)
-  const snapV2new = newV1 + pool / g + (currentPrice * shares - newV1) / (2 * Math.sqrt(g));
+  // cycleSnapshot: 새 사이클 시작 시점 = 새 V1(newV1)과 동일한 값 (중복 계산 없음)
   save(KEYS.cycleSnapshot, JSON.stringify({
     cycleWeek:  fromCycle + 2,
-    v2:         snapV2new,
-    vlow:       snapV2new * 0.85,
-    vhigh:      snapV2new * 1.15,
+    v2:         newV1,
+    vlow:       newV1 * 0.85,
+    vhigh:      newV1 * 1.15,
     shares:     shares,
     pool:       pool,
     startPrice: currentPrice,
