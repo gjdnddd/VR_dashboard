@@ -439,7 +439,7 @@
         <div class="metric-item">
           <div class="metric-label">V2</div>
           <div class="metric-value c-blue" id="v2Value">--</div>
-          <button onclick="recalcV2()" style="margin-top:7px; width:100%; background:#0f172a; border:1px solid #1d4ed8; color:#60a5fa; border-radius:6px; padding:5px 0; font-size:11px; cursor:pointer;">↻ 현재가로 갱신</button>
+          <button onclick="recalcV1()" style="margin-top:7px; width:100%; background:#0f172a; border:1px solid #1d4ed8; color:#60a5fa; border-radius:6px; padding:5px 0; font-size:11px; cursor:pointer;">↻ 재계산 (입력 교정)</button>
         </div>
         <div class="metric-item">
           <div class="metric-label">Vlow (×0.85)</div>
@@ -671,9 +671,9 @@
     <div class="modal-title">설정 수정</div>
 
     <div class="form-group">
-      <label>V1 — 이전 사이클 기준값 (USD)</label>
+      <label>V1 — 현재 사이클 기준 V값 (USD)</label>
       <input type="number" id="edit_v1" inputmode="decimal" step="0.01" min="0">
-      <div class="modal-hint">변경 시 V2가 재계산됩니다</div>
+      <div class="modal-hint">밴드 중심값. Vlow/Vhigh = 이 값의 ±15%</div>
     </div>
 
     <div class="form-group">
@@ -691,7 +691,7 @@
     <div class="form-group">
       <label>보유 주식수 (주)</label>
       <input type="number" id="edit_shares" inputmode="numeric" step="1" min="0">
-      <div class="modal-hint">변경 시 V2가 재계산됩니다</div>
+      <div class="modal-hint">현재 실제 보유 수량</div>
     </div>
 
     <div class="form-group">
@@ -763,8 +763,9 @@ const KEYS = {
   setupAt:          'vr_setup_at',
   githubPat:        'vr_github_pat',
   gistId:           'vr_gist_id',
-  v2:               'vr_v2',
-  v2ForCycle:       'vr_v2_for_cycle',
+  v2:               'vr_v2',              // 레거시 — 더 이상 계산에 사용 안 함 (정리용으로만 유지)
+  v2ForCycle:       'vr_v2_for_cycle',    // 레거시
+  prevV1:           'vr_prev_v1',         // 직전 사이클 V1 (롤오버 입력값 교정용)
   vHistory:         'vr_v_history',
   rolloverSnap:     'vr_rollover_snap',
   cycleSnapshot:    'vr_cycle_snapshot',
@@ -773,7 +774,7 @@ const KEYS = {
 // 클라우드 동기화 대상 키 (PAT·GistID는 제외 — 기기마다 따로 관리)
 const SYNC_KEYS = ['vr_v1','vr_shares','vr_pool','vr_g','vr_start_week',
                    'vr_unit_qty','vr_seed','vr_trades','vr_cycle_start_pool','vr_last_rollover_week',
-                   'vr_v2','vr_v2_for_cycle','vr_v_history','vr_rollover_snap','vr_cycle_snapshot'];
+                   'vr_prev_v1','vr_v_history','vr_rollover_snap','vr_cycle_snapshot'];
 
 const save    = (k, v) => localStorage.setItem(k, String(v));
 const load    = (k)    => localStorage.getItem(k);
@@ -787,11 +788,9 @@ function loadJSON(key, fallback = null) {
   } catch { return fallback; }
 }
 
-// V2 헬퍼 — 저장된 V2 우선, 없으면 축약 공식
+// 밴드 중심 V — 사이클 V1 그 자체 (롤오버 때 공식 1회 적용으로만 바뀜)
 function getEffectiveV2() {
-  const stored = loadNum(KEYS.v2);
-  if (stored > 0) return stored;
-  return loadNum(KEYS.v1) + loadNum(KEYS.pool) / (loadNum(KEYS.g) || 10);
+  return loadNum(KEYS.v1);
 }
 
 // Gist API 공통 헤더
@@ -1034,17 +1033,21 @@ function applyManualPrice() {
 
 function refreshPrice() { fetchPrice(); }
 
-function recalcV2() {
+// 입력값 교정용 — 직전 사이클 V1 기준으로 롤오버 공식을 다시 적용해 이번 사이클 V1을 재계산
+function recalcV1() {
   if (!currentPrice) { alert('현재가를 먼저 입력하세요.'); return; }
-  const v1     = loadNum(KEYS.v1);
+  const prevV1 = loadNum(KEYS.prevV1);
+  if (!prevV1) {
+    alert('직전 사이클 V1 기록이 없습니다.\n(이 버튼은 롤오버 후 Pool·수량·현재가를 잘못 넣었을 때 교정용입니다)');
+    return;
+  }
   const shares = loadNum(KEYS.shares);
   const pool   = loadNum(KEYS.pool);
   const g      = loadNum(KEYS.g) || 10;
-  const ci     = getCycleInfo(load(KEYS.startWeek) || '');
-  const curWeek = ci ? ci.cycleWeek : 0;
-  const v2 = v1 + pool / g + (currentPrice * shares - v1) / (2 * Math.sqrt(g));
-  save(KEYS.v2, v2);
-  save(KEYS.v2ForCycle, curWeek);
+  const newV1  = prevV1 + pool / g + (currentPrice * shares - prevV1) / (2 * Math.sqrt(g));
+  if (!confirm(`직전 V1 ${fmtAmt(prevV1)} 기준으로 재계산합니다.\n새 V1: ${fmtAmt(newV1)}\n적용하시겠습니까?`)) return;
+  save(KEYS.v1, newV1);
+  autoGistPush();
   calculateAndRender();
 }
 
@@ -1906,10 +1909,11 @@ function rolloverCycle() {
     startPrice:  currentPrice,
   });
 
+  save(KEYS.prevV1,           v1);      // 직전 사이클 V1 보관 — 입력값 잘못 넣었을 때 재계산용
   save(KEYS.v1,               newV1);
   save(KEYS.cycleStartPool,   pool);
   save(KEYS.lastRolloverWeek, fromCycle);
-  localStorage.removeItem(KEYS.v2ForCycle);
+  localStorage.removeItem(KEYS.v2ForCycle);  // 레거시 정리
   localStorage.removeItem(KEYS.v2);
   localStorage.removeItem(KEYS.rolloverSnap);
 
@@ -1958,10 +1962,9 @@ function calculateAndRender() {
 
   const eval_ = currentPrice !== null ? currentPrice * shares : null;
 
-  // V2: 사이클 시작 시 현재가가 처음 들어오는 순간 1회 계산 후 고정
+  // V2(밴드 중심) = 사이클 V1 그 자체 — 롤오버 때만 바뀜
   const _ci          = getCycleInfo(startWeek);
   const _curWeek     = _ci ? _ci.cycleWeek : 0;
-  let _v2ForCycle    = parseInt(load(KEYS.v2ForCycle) ?? '-99');
 
   // 사이클 종료 감지 → 롤오버 스냅샷 저장 (V2/Pool/Shares 종료 시점 고정)
   const _lastRoll  = parseInt(load(KEYS.lastRolloverWeek) ?? '-1');
@@ -1973,16 +1976,7 @@ function calculateAndRender() {
     save(KEYS.rolloverSnap, JSON.stringify({ fromCycle: _curWeek, v2: _snapV2, pool, shares }));
   }
 
-  let v2;
-  if (currentPrice !== null && _v2ForCycle !== _curWeek) {
-    v2 = v1 + pool / g + (currentPrice * shares - v1) / (2 * Math.sqrt(g));
-    save(KEYS.v2, v2);
-    save(KEYS.v2ForCycle, _curWeek);
-  } else if (_v2ForCycle === _curWeek) {
-    v2 = loadNum(KEYS.v2);
-  } else {
-    v2 = null; // 현재가 미입력 + 저장값 없음 → V2 미계산
-  }
+  const v2 = v1 > 0 ? v1 : null;
   const vlow  = v2 !== null ? v2 * 0.85 : null;
   const vhigh = v2 !== null ? v2 * 1.15 : null;
 
@@ -2211,9 +2205,7 @@ function saveSettings() {
   if (isNaN(shares) || shares < 0){ alert('보유 주식수를 올바르게 입력하세요.'); return; }
   if (!seed || seed <= 0)         { alert('시드 값을 올바르게 입력하세요.'); return; }
 
-  const v1Changed     = v1     !== loadNum(KEYS.v1);
-  const poolChanged   = pool   !== loadNum(KEYS.pool);
-  const sharesChanged = shares !== loadNum(KEYS.shares);
+  const poolChanged = pool !== loadNum(KEYS.pool);
 
   save(KEYS.v1,     v1);
   save(KEYS.g,      g);
@@ -2221,13 +2213,9 @@ function saveSettings() {
   save(KEYS.shares, shares);
   save(KEYS.seed,   seed);
 
-  if (v1Changed || sharesChanged) {
-    localStorage.removeItem(KEYS.v2);
-    localStorage.removeItem(KEYS.v2ForCycle);
-  }
-
   if (poolChanged) save(KEYS.cycleStartPool, pool);
 
+  autoGistPush();  // 수동 교정값이 다른 기기에서 옛 값으로 되돌아가지 않도록 즉시 업로드
   closeSettings();
   calculateAndRender();
 }
