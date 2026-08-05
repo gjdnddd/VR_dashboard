@@ -743,6 +743,38 @@
   </div>
 </div>
 
+<!-- ── 롤오버 / V1 재계산 확인 모달 ──
+     입력값은 "사이클 종료 시점" 기준. 자동으로 채우되 사용자가 고칠 수 있다. -->
+<div id="rolloverModal" class="modal-overlay hidden" onclick="modalOverlayClick(event)">
+  <div class="modal-sheet">
+    <div class="modal-title" id="ro_title">사이클 롤오버</div>
+    <div class="modal-hint" id="ro_basis" style="text-align:center; margin:-16px 0 18px; font-size:12px;"></div>
+
+    <div class="form-group">
+      <label>종료일 종가</label>
+      <input type="number" step="0.01" inputmode="decimal" id="ro_price" oninput="roPreview()">
+      <div class="modal-hint" id="ro_priceHint">사이클 마지막 거래일 종가</div>
+    </div>
+
+    <div class="form-group">
+      <label>보유 주식수</label>
+      <input type="number" step="1" inputmode="numeric" id="ro_shares" oninput="roPreview()">
+      <div class="modal-hint">사이클 종료 시점 기준 — 마지막날 체결분까지 포함</div>
+    </div>
+
+    <div class="form-group">
+      <label>Pool</label>
+      <input type="number" step="0.01" inputmode="decimal" id="ro_pool" oninput="roPreview()">
+      <div class="modal-hint">사이클 종료 시점 기준</div>
+    </div>
+
+    <div id="ro_preview" style="background:#0f172a; border:1px solid #334155; border-radius:10px; padding:14px; margin-bottom:16px; font-size:13px; line-height:1.7;"></div>
+
+    <button class="btn" onclick="roConfirm()">확정</button>
+    <button class="btn btn-danger" style="margin-top:8px;" onclick="closeRollover()">취소</button>
+  </div>
+</div>
+
 </div><!-- /dashboardScreen -->
 
 <script>
@@ -950,8 +982,8 @@ function saveSnapshot() {
   const v2  = getEffectiveV2();
   const pool = loadNum(KEYS.pool);
   const sh   = loadNum(KEYS.shares);
-  const ci   = getCycleInfo(load(KEYS.startWeek) || '');
-  const cw   = ci ? ci.cycleWeek : 0;
+  // cycleWeek은 월요일에 넘어가므로 롤오버 직후 토·일에 저장하면 이전 주차가 박힌다 → 보정
+  const cw   = activeCycleWeek();
   const existing = loadJSON(KEYS.cycleSnapshot, null);
   const sp   = currentPrice ?? existing?.startPrice ?? null;
   if (!sp) { alert('현재가를 먼저 입력하세요.'); return; }
@@ -1033,22 +1065,23 @@ function applyManualPrice() {
 
 function refreshPrice() { fetchPrice(); }
 
-// 입력값 교정용 — 직전 사이클 V1 기준으로 롤오버 공식을 다시 적용해 이번 사이클 V1을 재계산
+// 입력값 교정용 — 직전 사이클 V1 기준으로 롤오버 공식을 다시 적용해 이번 사이클 V1을 재계산.
+// 롤오버와 같은 모달을 쓴다 (같은 결함을 두 곳에 두지 않기 위해).
 function recalcV1() {
-  if (!currentPrice) { alert('현재가를 먼저 입력하세요.'); return; }
   const prevV1 = loadNum(KEYS.prevV1);
   if (!prevV1) {
-    alert('직전 사이클 V1 기록이 없습니다.\n(이 버튼은 롤오버 후 Pool·수량·현재가를 잘못 넣었을 때 교정용입니다)');
+    alert('직전 사이클 V1 기록이 없습니다.\n(이 버튼은 롤오버 후 Pool·수량·종가를 잘못 넣었을 때 교정용입니다)');
     return;
   }
-  const shares = loadNum(KEYS.shares);
-  const pool   = loadNum(KEYS.pool);
-  const g      = loadNum(KEYS.g) || 10;
-  const newV1  = prevV1 + pool / g + (currentPrice * shares - prevV1) / (2 * Math.sqrt(g));
-  if (!confirm(`직전 V1 ${fmtAmt(prevV1)} 기준으로 재계산합니다.\n새 V1: ${fmtAmt(newV1)}\n적용하시겠습니까?`)) return;
-  save(KEYS.v1, newV1);
-  autoGistPush();
-  calculateAndRender();
+  const cw = activeCycleWeek();
+  roMode = 'recalc';
+  roCtx  = {
+    fromCycle: cw - 2,           // 이 사이클을 만들어낸 롤오버 기준 사이클
+    baseV1:    prevV1,
+    g:         loadNum(KEYS.g) || 10,
+    endMs:     cycleEndMs(cw - 2),
+  };
+  openRolloverModal(`${cw}주차 V1 재계산 (입력 교정)`);
 }
 
 function adjustBuyUnit(delta) {
@@ -1100,30 +1133,29 @@ function fmtAmt(n) {
    Buy / Sell table logic
    ============================================================ */
 function runBuySimulation(price, shares, vlow, pool, unit) {
-  const floor = price * 0.80, limit = pool * 0.75;
+  const floor20 = price * 0.80, limit = pool * 0.75;
   let sim = shares, used = 0, cum = 0;
   const rows = [];
   while (true) {
     const trig = vlow / sim;
-    if (trig < floor) break;
     const cost = trig * unit;
     if (used + cost > limit) break;
     used += cost; sim += unit; cum += unit;
-    rows.push({ price: trig, qty: unit, cumQty: cum, poolUsed: used });
+    rows.push({ price: trig, qty: unit, cumQty: cum, poolUsed: used, beyond20: trig < floor20 });
   }
   return rows;
 }
 
 function runSellSimulation(price, shares, vhigh, unit) {
-  const ceil = price * 1.20;
+  const ceil20 = price * 1.20, ceil40 = price * 1.40;
   let sim = shares, gain = 0, cum = 0;
   const rows = [];
   while (true) {
     if (sim < unit) break;
     const trig = vhigh / sim;
-    if (trig > ceil) break;
+    if (trig > ceil40) break;
     gain += trig * unit; sim -= unit; cum += unit;
-    rows.push({ price: trig, qty: unit, cumQty: cum, poolGain: gain });
+    rows.push({ price: trig, qty: unit, cumQty: cum, poolGain: gain, beyond20: trig > ceil20 });
   }
   return rows;
 }
@@ -1143,7 +1175,7 @@ function renderBuyTable(price, shares, vlow, pool, unit) {
   if (!price || vlow === null) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
 
   const rows = runBuySimulation(price, shares, vlow, pool, unit);
-  const floor = price * 0.80, lim = pool * 0.75;
+  const floor20 = price * 0.80, lim = pool * 0.75;
   const depBtnLabel = depositExpanded ? '예수금 접기 ▲' : '예수금 펼치기 ▼';
   const depDisplay  = depositExpanded ? '' : 'display:none;';
 
@@ -1159,17 +1191,20 @@ function renderBuyTable(price, shares, vlow, pool, unit) {
     </div>
     <div class="tbl-summary">
       <div class="row"><span class="c-muted">Vlow</span><span class="c-green">${fmt(vlow)}</span></div>
-      <div class="row"><span class="c-muted">-20% 하한</span><span>$${floor.toFixed(2)}</span></div>
+      <div class="row"><span class="c-muted">-20% 지점</span><span>$${floor20.toFixed(2)}</span></div>
       <div class="row"><span class="c-muted">Pool 75% 한도</span><span class="c-yellow">${fmt(lim)}</span></div>
       <div class="row" style="margin-top:2px;"><span class="c-muted">항목 수</span><span>${rows.length}개</span></div>
     </div>`;
 
   if (!rows.length) {
-    html += '<div class="table-empty">-20% 구간 내 매수 조건 없음<br><span class="c-muted">또는 Pool 75% 소진</span></div>';
+    html += '<div class="table-empty">매수 조건 없음<br><span class="c-muted">Pool 75% 한도 부족</span></div>';
   } else {
     html += `<table class="vr-table"><thead><tr><th>매수가</th><th>수량</th><th>누적</th><th>Pool 소진</th></tr></thead><tbody>`;
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
+      if (r.beyond20 && (i === 0 || !rows[i - 1].beyond20)) {
+        html += `<tr><td colspan="4" style="text-align:center;color:#64748b;font-size:11px;padding:6px 0;border-top:1px dashed #334155;border-bottom:1px dashed #334155;">─── ▼ -20% 지점 ($${floor20.toFixed(2)}) ───</td></tr>`;
+      }
       const hit = r.price >= price;
       html += `<tr class="row-buy${hit ? ' row-triggered' : ''}">
         <td class="c-green">$${r.price.toFixed(2)}</td><td>${r.qty}주</td><td>${r.cumQty}주</td><td class="c-yellow">${fmt(r.poolUsed)}</td>
@@ -1188,7 +1223,7 @@ function renderSellTable(price, shares, vhigh, unit) {
   if (!price || vhigh === null) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
 
   const rows = runSellSimulation(price, shares, vhigh, unit);
-  const ceil = price * 1.20;
+  const ceil20 = price * 1.20, ceil40 = price * 1.40;
 
   let html = `
     <div class="tbl-title tbl-title-sell" style="justify-content:space-between;">▲ 매도 테이블
@@ -1200,15 +1235,20 @@ function renderSellTable(price, shares, vhigh, unit) {
     </div>
     <div class="tbl-summary">
       <div class="row"><span class="c-muted">Vhigh</span><span class="c-red">${fmt(vhigh)}</span></div>
-      <div class="row"><span class="c-muted">+20% 상한</span><span>$${ceil.toFixed(2)}</span></div>
+      <div class="row"><span class="c-muted">+20% 지점</span><span>$${ceil20.toFixed(2)}</span></div>
+      <div class="row"><span class="c-muted">+40% 상한</span><span>$${ceil40.toFixed(2)}</span></div>
       <div class="row" style="margin-top:2px;"><span class="c-muted">항목 수</span><span>${rows.length}개</span></div>
     </div>`;
 
   if (!rows.length) {
-    html += '<div class="table-empty">+20% 구간 내 매도 조건 없음</div>';
+    html += '<div class="table-empty">매도 조건 없음</div>';
   } else {
     html += `<table class="vr-table"><thead><tr><th>매도가</th><th>수량</th><th>누적</th><th>예상 회수</th></tr></thead><tbody>`;
-    for (const r of rows) {
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.beyond20 && (i === 0 || !rows[i - 1].beyond20)) {
+        html += `<tr><td colspan="4" style="text-align:center;color:#64748b;font-size:11px;padding:6px 0;border-top:1px dashed #334155;border-bottom:1px dashed #334155;">─── ▲ +20% 지점 ($${ceil20.toFixed(2)}) ───</td></tr>`;
+      }
       const hit = r.price <= price;
       html += `<tr class="row-sell${hit ? ' row-triggered' : ''}">
         <td class="c-red">$${r.price.toFixed(2)}</td><td>${r.qty}주</td><td>${r.cumQty}주</td><td class="c-blue">${fmt(r.poolGain)}</td>
@@ -1862,73 +1902,182 @@ function drawRateChart(trades) {
 }
 
 /* ============================================================
-   Cycle rollover (V2 → V1)
+   Cycle rollover (V2 → V1) / V1 재계산 — 공통 확인 모달
+
+   핵심 원칙: 계산 입력(종가·수량·Pool)은 "사이클 종료 시점"에 고정된다.
+   버튼을 언제 누르든 같은 V가 나와야 하므로 클릭 시점의 실시간 값을 쓰지 않는다.
+   자동으로 채우되 최종 확정은 사용자가 한다 (거래기록에 없는 Pool 변동 등을 그 자리에서 보정).
    ============================================================ */
+let roMode = 'rollover';   // 'rollover' | 'recalc'
+let roCtx  = null;         // { fromCycle, baseV1, g, endMs }
+
+// 사이클 마감 timestamp — getCycleInfo와 동일한 계산이지만 임의 주차를 지정할 수 있다.
+// (월요일 이후 늦게 롤오버해도 "그 사이클"의 마감 시각이 흔들리지 않도록)
+function cycleEndMs(cycleWeek) {
+  const sw = load(KEYS.startWeek) || '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(sw)) return Date.now();
+  const [y, mo, d] = sw.split('-').map(Number);
+  const cMon = Date.UTC(y, mo - 1, d) + (cycleWeek / 2) * 14 * 86400000;
+  return cMon + (11 * 86400 + 21 * 3600 + 10 * 60) * 1000;   // 토 06:10 KST
+}
+
+// 현재 활성 사이클 주차 — cycleWeek은 월요일에 넘어가므로, 롤오버 직후 토·일에는
+// getCycleInfo가 아직 이전 주차를 반환한다. lastRolloverWeek + 2로 보정한다.
+function activeCycleWeek() {
+  const ci = getCycleInfo(load(KEYS.startWeek) || '');
+  const cw = ci ? ci.cycleWeek : 0;
+  const lr = parseInt(load(KEYS.lastRolloverWeek) ?? '-1');
+  return lr >= 0 ? Math.max(cw, lr + 2) : cw;
+}
+
+// 사이클 마감 이전 "마지막 거래일"의 종가.
+// 일봉을 받아 마감시각 이전 마지막 봉을 고르므로, 금요일이 공휴일이면 목요일이 자동으로 잡힌다.
+async function fetchCycleClose(endMs) {
+  const YF = 'https://query1.finance.yahoo.com/v8/finance/chart/TQQQ?interval=1d&range=1mo';
+  try {
+    const res = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(YF)}`);
+    const j   = await res.json();
+    const r   = j.chart?.result?.[0];
+    const ts  = r?.timestamp || [];
+    const cl  = r?.indicators?.quote?.[0]?.close || [];
+    let hit = null;
+    for (let i = 0; i < ts.length; i++) {
+      if (cl[i] == null) continue;
+      if (ts[i] * 1000 > endMs) break;          // 마감 이후 봉은 제외
+      hit = { price: cl[i], ms: ts[i] * 1000 };
+    }
+    return hit;
+  } catch (e) { console.error('close fetch fail', e); return null; }
+}
+
 function rolloverCycle() {
   const snap = loadJSON(KEYS.rolloverSnap, null);
-
   if (!snap) {
     alert('롤오버 대기 중인 사이클이 없습니다.\n사이클 종료(토요일 06:10 KST) 후 앱을 열면 자동으로 준비됩니다.');
     return;
   }
+  roMode = 'rollover';
+  roCtx  = {
+    fromCycle: snap.fromCycle,
+    baseV1:    loadNum(KEYS.v1),          // 이번 사이클 V1 (사이클 내내 불변)
+    g:         loadNum(KEYS.g) || 10,
+    endMs:     cycleEndMs(snap.fromCycle),
+  };
+  openRolloverModal(`${snap.fromCycle}주차 → ${snap.fromCycle + 2}주차 롤오버`);
+}
 
-  if (!currentPrice) {
-    alert('현재가를 먼저 입력하세요.\n(사이클 시작 시점의 종가를 입력하면 차트 데이터가 정확해집니다.)');
+async function openRolloverModal(title) {
+  document.getElementById('ro_title').textContent = title;
+  // endMs는 UTC 기준 금요일 21:10 — fmtDate가 UTC를 읽으므로 KST 날짜(토요일)로 보정해서 표시
+  document.getElementById('ro_basis').textContent =
+    `기준: ${roCtx.fromCycle}주차 마감 ${fmtDate(new Date(roCtx.endMs + 9 * 3600000))} 06:10 KST`;
+  document.getElementById('rolloverModal').classList.remove('hidden');
+
+  // 롤오버: 현재값으로 채움 (종료 후 거래를 입력했다면 사용자가 되돌려야 함)
+  // 재계산: 이미 박제된 사이클 시작 스냅샷 값으로 채움 (그게 교정 대상이므로)
+  const fill = roMode === 'recalc' ? loadJSON(KEYS.cycleSnapshot, null) : null;
+  document.getElementById('ro_shares').value = fill ? fill.shares : loadNum(KEYS.shares);
+  document.getElementById('ro_pool').value   = fill ? fill.pool   : loadNum(KEYS.pool);
+
+  const priceEl = document.getElementById('ro_price');
+  const hintEl  = document.getElementById('ro_priceHint');
+  priceEl.value = '';
+  hintEl.textContent = '종료일 종가 조회 중…';
+  roPreview();
+
+  const hit = await fetchCycleClose(roCtx.endMs);
+  if (hit) {
+    priceEl.value = hit.price.toFixed(2);
+    hintEl.textContent = `${fmtDate(new Date(hit.ms))} 종가 자동조회 — 다르면 직접 수정하세요`;
+  } else {
+    priceEl.value = currentPrice ?? '';
+    hintEl.textContent = '자동조회 실패 — 사이클 마지막 거래일 종가를 직접 입력하세요';
+  }
+  roPreview();
+}
+
+function closeRollover() {
+  document.getElementById('rolloverModal').classList.add('hidden');
+}
+
+function roInputs() {
+  return {
+    px: parseFloat(document.getElementById('ro_price').value),
+    sh: parseInt(document.getElementById('ro_shares').value),
+    pl: parseFloat(document.getElementById('ro_pool').value),
+  };
+}
+
+function roPreview() {
+  const el = document.getElementById('ro_preview');
+  const { px, sh, pl } = roInputs();
+  if (!roCtx || !(px > 0) || !(sh >= 0) || isNaN(pl)) {
+    el.innerHTML = '<span style="color:#f59e0b;">종가 · 수량 · Pool을 모두 입력하세요</span>';
     return;
   }
+  const ev = px * sh;
+  const nv = roCtx.baseV1 + pl / roCtx.g + (ev - roCtx.baseV1) / (2 * Math.sqrt(roCtx.g));
+  el.innerHTML =
+    `<div style="color:#cbd5e1;">기준 V1 <b style="color:#f1f5f9;">${fmtAmt(roCtx.baseV1)}</b>` +
+    ` · 평가금 <b style="color:#f1f5f9;">${fmtAmt(ev)}</b> (${sh}주 × $${px})</div>` +
+    `<div style="margin-top:7px; font-size:15px;">새 V1 <b style="color:#60a5fa;">${fmtAmt(nv)}</b></div>` +
+    `<div style="color:#cbd5e1;">Vlow ${fmtAmt(nv * 0.85)} · Vhigh ${fmtAmt(nv * 1.15)}</div>`;
+}
 
-  const { fromCycle } = snap;
+function roConfirm() {
+  const { px, sh, pl } = roInputs();
+  if (!roCtx || !(px > 0) || !(sh >= 0) || isNaN(pl)) {
+    alert('종가 · 수량 · Pool을 모두 입력하세요.');
+    return;
+  }
+  const { fromCycle, baseV1, g } = roCtx;
+  const newV1    = baseV1 + pl / g + (px * sh - baseV1) / (2 * Math.sqrt(g));
+  const newCycle = fromCycle + 2;
 
-  // 롤오버 계산은 항상 클릭 시점의 실제 값 사용 (감지 시점에 얼어붙은 stale snap 값 아님)
-  const v1     = loadNum(KEYS.v1);       // a — 이번 사이클 V1 (사이클 내내 불변)
-  const g      = loadNum(KEYS.g) || 10;
-  const pool   = loadNum(KEYS.pool);     // 실시간 pool
-  const shares = loadNum(KEYS.shares);   // 실시간 주식수
-  const newV1  = v1 + pool / g + (currentPrice * shares - v1) / (2 * Math.sqrt(g));  // b
-
-  if (!confirm(`${fromCycle}주차 → ${fromCycle + 2}주차 롤오버\nV1: ${fmtAmt(newV1)} / Pool: ${fmtAmt(pool)}\n계속하시겠습니까?`)) return;
-
-  // 다음 사이클 시작일: 초기 startWeek 기준 + (fromCycle+2)/2 × 14일
+  // 새 사이클 시작일: 초기 startWeek 기준 + (newCycle/2) × 14일
   const sw = load(KEYS.startWeek) || '';
   const [sy, sm, sd] = sw.split('-').map(Number);
   const startMon = new Date(Date.UTC(sy, sm - 1, sd));
   const nextMon  = new Date(startMon);
-  nextMon.setUTCDate(startMon.getUTCDate() + ((fromCycle + 2) / 2) * 14);
-
-  const nextVlow  = Math.round(newV1 * 0.85);
-  const nextVhigh = Math.round(newV1 * 1.15);
+  nextMon.setUTCDate(startMon.getUTCDate() + (newCycle / 2) * 14);
 
   addOrUpdateVHistory({
-    cycleWeek:   fromCycle + 2,
+    cycleWeek:   newCycle,
     startDate:   nextMon.toISOString().slice(0, 10),
-    vlow:        nextVlow,
-    vhigh:       nextVhigh,
-    shares:      shares,
-    startShares: shares,
-    startPool:   pool,
-    startPrice:  currentPrice,
+    v1:          newV1,          // V 원값 — 반올림 밴드에서 역산하지 않도록
+    g:           g,
+    vlow:        Math.round(newV1 * 0.85),
+    vhigh:       Math.round(newV1 * 1.15),
+    shares:      sh,
+    startShares: sh,
+    startPool:   pl,
+    startPrice:  px,
   });
 
-  save(KEYS.prevV1,           v1);      // 직전 사이클 V1 보관 — 입력값 잘못 넣었을 때 재계산용
-  save(KEYS.v1,               newV1);
-  save(KEYS.cycleStartPool,   pool);
-  save(KEYS.lastRolloverWeek, fromCycle);
-  localStorage.removeItem(KEYS.v2ForCycle);  // 레거시 정리
-  localStorage.removeItem(KEYS.v2);
-  localStorage.removeItem(KEYS.rolloverSnap);
+  if (roMode === 'rollover') {
+    save(KEYS.prevV1,           baseV1);   // 직전 사이클 V1 보관 — 입력값 잘못 넣었을 때 재계산용
+    save(KEYS.lastRolloverWeek, fromCycle);
+    localStorage.removeItem(KEYS.v2ForCycle);  // 레거시 정리
+    localStorage.removeItem(KEYS.v2);
+    localStorage.removeItem(KEYS.rolloverSnap);
+  }
 
-  // cycleSnapshot: 새 사이클 시작 시점 = 새 V1(newV1)과 동일한 값 (중복 계산 없음)
+  save(KEYS.v1,             newV1);
+  save(KEYS.cycleStartPool, pl);
+
+  // cycleSnapshot: 새 사이클 시작 시점 = 새 V1과 동일한 값 (중복 계산 없음)
   save(KEYS.cycleSnapshot, JSON.stringify({
-    cycleWeek:  fromCycle + 2,
+    cycleWeek:  newCycle,
     v2:         newV1,
     vlow:       newV1 * 0.85,
     vhigh:      newV1 * 1.15,
-    shares:     shares,
-    pool:       pool,
-    startPrice: currentPrice,
+    shares:     sh,
+    pool:       pl,
+    startPrice: px,
   }));
   snapshotMode = false;
 
+  closeRollover();
   autoGistPush();
   calculateAndRender();
 }
@@ -2062,11 +2211,10 @@ function calculateAndRender() {
 
     if (bSnap) {
       // 스냅샷 존재 → 롤오버 대기 배너 (언제든 클릭 가능)
-      // 미리보기는 실제 롤오버 계산과 동일하게 실시간 값으로 계산 (stale snap 값 아님)
-      const previewV1   = currentPrice !== null ? (v1 + pool / g + (currentPrice * shares - v1) / (2 * Math.sqrt(g))) : bSnap.v2;
-      const previewPool = currentPrice !== null ? pool : bSnap.pool;
+      // 실제 V1은 확인 모달에서 "종료일 종가·수량·Pool"로 계산하므로 여기서 미리보기를 띄우지 않는다
+      // (실시간 가격으로 계산한 값을 보여주면 확정값과 달라져 혼란만 준다)
       document.getElementById('rolloverSubText').textContent =
-        `${bSnap.fromCycle}주차 종료 · V1: ${fmtAmt(previewV1)} / Pool: ${fmtAmt(previewPool)}`;
+        `${bSnap.fromCycle}주차 종료 · 종료일 종가·수량·Pool 기준으로 계산합니다`;
       banner.classList.remove('hidden');
       doneBox.classList.add('hidden');
     } else if (c.isEnded && lastRollover === c.cycleWeek) {
@@ -2190,6 +2338,7 @@ function closeSettings() {
 
 function modalOverlayClick(e) {
   if (e.target === document.getElementById('settingsModal')) closeSettings();
+  if (e.target === document.getElementById('rolloverModal')) closeRollover();
 }
 
 function saveSettings() {
