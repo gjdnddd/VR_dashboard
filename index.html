@@ -505,6 +505,7 @@
         <span style="font-size:11px;" class="c-muted" id="poolUsedLabel">이번 사이클 매수: $0</span>
         <span style="font-size:11px;" class="c-muted" id="poolPctLabel">0%</span>
       </div>
+      <button class="edit-settings-btn" onclick="openDeposit()">💰 입금/출금</button>
     </div>
 
     <div class="card">
@@ -765,13 +766,51 @@
     <div class="form-group">
       <label>Pool</label>
       <input type="number" step="0.01" inputmode="decimal" id="ro_pool" oninput="roPreview()">
-      <div class="modal-hint">사이클 종료 시점 기준</div>
+      <div class="modal-hint" id="ro_poolHint">사이클 종료 시점 기준</div>
+    </div>
+
+    <div id="ro_depositWrap">
+      <div class="form-group">
+        <label>적립금 (선택)</label>
+        <input type="number" step="0.01" inputmode="decimal" id="ro_deposit" value="0" oninput="roPreview()">
+        <div class="modal-hint">새 사이클 시작 Pool에 더해집니다 (출금은 음수)</div>
+      </div>
+      <label style="display:flex; align-items:flex-start; gap:8px; font-size:12px; color:#e2e8f0; margin:-6px 0 16px; cursor:pointer;">
+        <input type="checkbox" id="ro_addToV" onchange="roPreview()" style="margin-top:2px;">
+        <span>V에도 가산 (적립식 정석 — 체크 해제 시 Pool만, 하락 방어용)</span>
+      </label>
     </div>
 
     <div id="ro_preview" style="background:#0f172a; border:1px solid #334155; border-radius:10px; padding:14px; margin-bottom:16px; font-size:13px; line-height:1.7;"></div>
 
     <button class="btn" onclick="roConfirm()">확정</button>
     <button class="btn btn-danger" style="margin-top:8px;" onclick="closeRollover()">취소</button>
+  </div>
+</div>
+
+<!-- ── 입금 / 출금 모달 ── -->
+<div id="depositModal" class="modal-overlay hidden" onclick="modalOverlayClick(event)">
+  <div class="modal-sheet">
+    <div class="modal-title">적립금 입금 / 출금</div>
+
+    <div class="form-group">
+      <label>금액 ($)</label>
+      <input type="number" step="0.01" min="0" inputmode="decimal" id="dp_amount" oninput="dpPreview()">
+      <div class="modal-hint">양수로 입력 후 아래 입금 / 출금 버튼을 누르세요</div>
+    </div>
+
+    <label style="display:flex; align-items:flex-start; gap:8px; font-size:12px; color:#e2e8f0; margin:-6px 0 16px; cursor:pointer;">
+      <input type="checkbox" id="dp_addToV" onchange="dpPreview()" style="margin-top:2px;">
+      <span>V에도 가산 (적립식 정석 — 체크 해제 시 Pool만, 하락 방어용)</span>
+    </label>
+
+    <div id="dp_preview" style="background:#0f172a; border:1px solid #334155; border-radius:10px; padding:14px; margin-bottom:16px; font-size:12px; line-height:1.7;"></div>
+
+    <div style="display:flex; gap:8px;">
+      <button class="btn" style="flex:1; background:#16a34a;" onclick="depositConfirm(1)">입금</button>
+      <button class="btn" style="flex:1; background:#d97706;" onclick="depositConfirm(-1)">출금</button>
+    </div>
+    <button class="btn btn-danger" style="margin-top:8px;" onclick="closeDeposit()">취소</button>
   </div>
 </div>
 
@@ -1132,8 +1171,9 @@ function fmtAmt(n) {
 /* ============================================================
    Buy / Sell table logic
    ============================================================ */
-function runBuySimulation(price, shares, vlow, pool, unit) {
-  const floor20 = price * 0.80, limit = pool * 0.75;
+// budget = 이번에 더 쓸 수 있는 누적 매수 한도($) — 호출자가 사이클 사용분을 반영해 넘긴다
+function runBuySimulation(price, shares, vlow, budget, unit) {
+  const floor20 = price * 0.80, limit = budget;
   let sim = shares, used = 0, cum = 0;
   const rows = [];
   while (true) {
@@ -1170,12 +1210,14 @@ function toggleDeposit() {
   calculateAndRender();
 }
 
-function renderBuyTable(price, shares, vlow, pool, unit) {
+function renderBuyTable(price, shares, vlow, budget, unit, info) {
   const el = document.getElementById('buyContent');
   if (!price || vlow === null) { el.innerHTML = '<div class="table-empty">현재가 로딩 후 표시됩니다</div>'; return; }
 
-  const rows = runBuySimulation(price, shares, vlow, pool, unit);
-  const floor20 = price * 0.80, lim = pool * 0.75;
+  const rows = runBuySimulation(price, shares, vlow, budget, unit);
+  const floor20 = price * 0.80;
+  const lim  = info ? info.limit : budget;
+  const used = info ? info.used  : 0;
   const depBtnLabel = depositExpanded ? '예수금 접기 ▲' : '예수금 펼치기 ▼';
   const depDisplay  = depositExpanded ? '' : 'display:none;';
 
@@ -1192,12 +1234,14 @@ function renderBuyTable(price, shares, vlow, pool, unit) {
     <div class="tbl-summary">
       <div class="row"><span class="c-muted">Vlow</span><span class="c-green">${fmt(vlow)}</span></div>
       <div class="row"><span class="c-muted">-20% 지점</span><span>$${floor20.toFixed(2)}</span></div>
-      <div class="row"><span class="c-muted">Pool 75% 한도</span><span class="c-yellow">${fmt(lim)}</span></div>
+      <div class="row"><span class="c-muted">사이클 한도 (시작 Pool×75%)</span><span>${fmt(lim)}</span></div>
+      <div class="row"><span class="c-muted">이번 사이클 매수</span><span>${fmt(used)}</span></div>
+      <div class="row"><span class="c-muted">잔여 한도</span><span class="c-yellow" style="font-weight:600;">${fmt(budget)}</span></div>
       <div class="row" style="margin-top:2px;"><span class="c-muted">항목 수</span><span>${rows.length}개</span></div>
     </div>`;
 
   if (!rows.length) {
-    html += '<div class="table-empty">매수 조건 없음<br><span class="c-muted">Pool 75% 한도 부족</span></div>';
+    html += `<div class="table-empty">매수 조건 없음<br><span class="c-muted">${budget > 0 ? '잔여 한도 부족' : '사이클 매수 한도 소진'}</span></div>`;
   } else {
     html += `<table class="vr-table"><thead><tr><th>매수가</th><th>수량</th><th>누적</th><th>Pool 소진</th></tr></thead><tbody>`;
     for (let i = 0; i < rows.length; i++) {
@@ -1314,7 +1358,7 @@ function parseAndVerify() {
   }
 
   const shares  = useSnap ? cycleSnap2.shares : loadNum(KEYS.shares);
-  const pool    = useSnap ? cycleSnap2.pool   : loadNum(KEYS.pool);
+  const buyBudget = useSnap ? cycleSnap2.pool * 0.75 : cycleBuyBudget().remaining;
   const unitQty = loadNum(KEYS.unitQty) || 1;
   const v2eff   = useSnap ? cycleSnap2.v2     : getEffectiveV2();
   const vlow    = useSnap ? cycleSnap2.vlow   : v2eff * 0.85;
@@ -1323,7 +1367,7 @@ function parseAndVerify() {
   const effectiveBuyUnit  = buyUnit  !== null ? buyUnit  : unitQty;
   const effectiveSellUnit = sellUnit !== null ? sellUnit : unitQty;
 
-  const buyRows  = runBuySimulation(refPrice, shares, vlow, pool, effectiveBuyUnit);
+  const buyRows  = runBuySimulation(refPrice, shares, vlow, buyBudget, effectiveBuyUnit);
   const sellRows = runSellSimulation(refPrice, shares, vhigh, effectiveSellUnit);
 
   const buyOrders  = orders.filter(o => o.type === '매수');
@@ -1543,9 +1587,8 @@ function confirmTrade() {
 
   const shares    = loadNum(KEYS.shares);
   const pool      = loadNum(KEYS.pool);
-  const startWeek = load(KEYS.startWeek) || '';
-  const cycleInfo = getCycleInfo(startWeek);
-  const cycleWeek = cycleInfo ? cycleInfo.cycleWeek : 0;
+  const cycleWeek = cycleWeekOfDate(t.date) ?? activeCycleWeek();
+  if (!confirmBuyLimit(t, cycleWeek, t.fee || 0)) return;
 
   const evalSnap  = t.price * (t.type === '매수' ? shares + t.qty : shares - t.qty);
   const v2    = getEffectiveV2();
@@ -1624,9 +1667,7 @@ function deleteTrade(id) {
 function renderHistory() {
   renderVrPending();
   const trades    = loadTrades();
-  const startWeek = load(KEYS.startWeek) || '';
-  const cycleInfo = getCycleInfo(startWeek);
-  const curCycle  = cycleInfo ? cycleInfo.cycleWeek : 0;
+  const curCycle  = activeCycleWeek();
   const cont      = document.getElementById('historyContent');
 
   const thisCycle  = trades.filter(t => (t.cycleWeek) === curCycle);
@@ -1930,6 +1971,129 @@ function activeCycleWeek() {
   return lr >= 0 ? Math.max(cw, lr + 2) : cw;
 }
 
+// 거래일("MM/DD")이 속한 사이클 주차 — 입력 시점이 아니라 거래일 기준으로 귀속한다.
+// 연도는 올해, 단 오늘보다 7일 넘게 미래면 작년으로 본다. 해석 불가면 null.
+function cycleWeekOfDate(mmdd) {
+  const m = /^\s*(\d{1,2})[\/.\-](\d{1,2})\s*$/.exec(String(mmdd || ''));
+  const sw = load(KEYS.startWeek) || '';
+  if (!m || !/^\d{4}-\d{2}-\d{2}$/.test(sw)) return null;
+  const mo = parseInt(m[1]), d = parseInt(m[2]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const kst = new Date(Date.now() + 9 * 3600000);
+  const todayMs = Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), kst.getUTCDate());
+  let y = kst.getUTCFullYear();
+  if (Date.UTC(y, mo - 1, d) - todayMs > 7 * 86400000) y -= 1;
+  const [sy, sm, sd] = sw.split('-').map(Number);
+  const diffDays = Math.floor((Date.UTC(y, mo - 1, d) - Date.UTC(sy, sm - 1, sd)) / 86400000);
+  if (diffDays < 0) return 0;
+  return Math.floor(diffDays / 14) * 2;
+}
+
+// 사이클 매수 사용액 (수수료 포함)
+function cycleBuyUsed(cw) {
+  return loadTrades()
+    .filter(t => t.type === '매수' && t.cycleWeek === cw)
+    .reduce((s, t) => s + (t.amount || 0) + (t.fee || 0), 0);
+}
+
+// 사이클 매수 한도 = 사이클 시작 Pool × 75% (누적)
+function cycleBuyBudget() {
+  const cw    = activeCycleWeek();
+  const pool  = loadNum(KEYS.pool);
+  const base  = loadNum(KEYS.cycleStartPool) || pool;
+  const limit = base * 0.75;
+  const used  = cycleBuyUsed(cw);
+  return {
+    cw, base, limit, used,
+    remaining: Math.max(0, Math.min(limit - used, pool)),
+    pct: limit > 0 ? used / limit * 100 : 0,
+  };
+}
+
+// 매수 기록 시 한도 초과 경고 — 계속 진행해도 되면 true
+function confirmBuyLimit(t, cycleWeek, fee) {
+  if (t.type !== '매수' || cycleWeek !== activeCycleWeek()) return true;
+  const b = cycleBuyBudget();
+  const total = b.used + t.amount + fee;
+  if (total <= b.limit) return true;
+  const pct = b.limit > 0 ? total / b.limit * 100 : 0;
+  return confirm(`⚠ 사이클 매수 한도 초과\n한도 ${fmtAmt(b.limit)} · 기매수 ${fmtAmt(b.used)} · 이번 ${fmtAmt(t.amount + fee)}\n→ 합계 ${fmtAmt(total)} (${pct.toFixed(0)}%)\n\n이미 체결된 거래라면 기록은 해야 합니다. 기록할까요?`);
+}
+
+// 입금(+)/출금(-) — 현재 사이클에 반영. addToV면 V(밴드 중심)에도 가산.
+function applyDeposit(amount, addToV) {
+  const A = Number(amount);
+  if (!A || isNaN(A)) return;
+  const cw = activeCycleWeek();
+
+  const newPool = loadNum(KEYS.pool) + A;
+  save(KEYS.pool, newPool);
+  save(KEYS.seed, loadNum(KEYS.seed) + A);
+  const csp = loadNum(KEYS.cycleStartPool);
+  save(KEYS.cycleStartPool, csp ? csp + A : newPool);
+
+  const snap = loadJSON(KEYS.cycleSnapshot, null);
+  if (snap && snap.cycleWeek === cw) {
+    snap.pool = (snap.pool || 0) + A;
+    if (addToV) { snap.v2 += A; snap.vlow = snap.v2 * 0.85; snap.vhigh = snap.v2 * 1.15; }
+    save(KEYS.cycleSnapshot, JSON.stringify(snap));
+  }
+
+  const arr = loadVHistory();
+  const h = arr.find(x => x.cycleWeek === cw);
+  if (h) {
+    h.startPool = (h.startPool || 0) + A;
+    h.deposit   = (h.deposit || 0) + A;
+    if (addToV) {
+      h.depositV = (h.depositV || 0) + A;
+      h.v1   = (h.v1 || 0) + A;
+      h.vlow = Math.round(h.v1 * 0.85);
+      h.vhigh = Math.round(h.v1 * 1.15);
+    }
+    const kst = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+    h.deposits = (h.deposits || []).concat([{ date: kst, amount: A, addToV: !!addToV }]);
+    saveVHistory(arr);
+  }
+
+  if (addToV) save(KEYS.v1, loadNum(KEYS.v1) + A);
+
+  autoGistPush();
+  calculateAndRender();
+  if (activeTab === 'history') renderHistory();
+}
+
+/* 입금/출금 모달 */
+function openDeposit() {
+  document.getElementById('dp_amount').value = '';
+  document.getElementById('dp_addToV').checked = false;
+  dpPreview();
+  document.getElementById('depositModal').classList.remove('hidden');
+}
+function closeDeposit() {
+  document.getElementById('depositModal').classList.add('hidden');
+}
+function dpPreview() {
+  const el = document.getElementById('dp_preview');
+  const A = parseFloat(document.getElementById('dp_amount').value);
+  const addToV = document.getElementById('dp_addToV').checked;
+  if (!(A > 0)) { el.innerHTML = '<span style="color:#f59e0b;">금액을 입력하세요</span>'; return; }
+  const pool = loadNum(KEYS.pool), seed = loadNum(KEYS.seed), v1 = loadNum(KEYS.v1);
+  const base = loadNum(KEYS.cycleStartPool) || pool;
+  el.innerHTML =
+    `<div style="color:#e2e8f0;">입금: Pool ${fmtAmt(pool)} → ${fmtAmt(pool + A)} · 시드 ${fmtAmt(seed)} → ${fmtAmt(seed + A)}</div>` +
+    `<div style="color:#e2e8f0;">출금: Pool ${fmtAmt(pool)} → ${fmtAmt(pool - A)} · 시드 ${fmtAmt(seed)} → ${fmtAmt(seed - A)}</div>` +
+    `<div style="color:#e2e8f0; margin-top:4px;">사이클 한도(75%): ${fmtAmt(base * 0.75)} → ${fmtAmt((base + A) * 0.75)} / ${fmtAmt((base - A) * 0.75)}</div>` +
+    `<div style="color:#e2e8f0; margin-top:4px;">V1: ${addToV ? `${fmtAmt(v1)} → ${fmtAmt(v1 + A)} / ${fmtAmt(v1 - A)}` : `${fmtAmt(v1)} (변동 없음 — Pool만)`}</div>`;
+}
+function depositConfirm(sign) {
+  const A = parseFloat(document.getElementById('dp_amount').value);
+  if (!(A > 0)) { alert('금액을 0보다 크게 입력하세요.'); return; }
+  const addToV = document.getElementById('dp_addToV').checked;
+  if (sign < 0 && A > loadNum(KEYS.pool)) { alert('출금액이 현재 Pool을 초과합니다.'); return; }
+  closeDeposit();
+  applyDeposit(sign * A, addToV);
+}
+
 // 사이클 마감 이전 "마지막 거래일"의 종가.
 // 일봉을 받아 마감시각 이전 마지막 봉을 고르므로, 금요일이 공휴일이면 목요일이 자동으로 잡힌다.
 async function fetchCycleClose(endMs) {
@@ -1977,7 +2141,15 @@ async function openRolloverModal(title) {
   // 재계산: 이미 박제된 사이클 시작 스냅샷 값으로 채움 (그게 교정 대상이므로)
   const fill = roMode === 'recalc' ? loadJSON(KEYS.cycleSnapshot, null) : null;
   document.getElementById('ro_shares').value = fill ? fill.shares : loadNum(KEYS.shares);
-  document.getElementById('ro_pool').value   = fill ? fill.pool   : loadNum(KEYS.pool);
+  // 재계산: 스냅샷 Pool에는 입금분이 포함돼 있으므로 빼서 "롤오버 시점 Pool"로 되돌려 채운다
+  const oldH = roMode === 'recalc' ? roHistEntry() : null;
+  const depIn = oldH ? (oldH.deposit || 0) : 0;
+  document.getElementById('ro_pool').value   = fill ? +(fill.pool - depIn).toFixed(2) : loadNum(KEYS.pool);
+  document.getElementById('ro_poolHint').textContent = depIn
+    ? `사이클 종료 시점 기준 (입금 ${fmtAmt(depIn)} 제외한 값)` : '사이클 종료 시점 기준';
+  document.getElementById('ro_depositWrap').classList.toggle('hidden', roMode !== 'rollover');
+  document.getElementById('ro_deposit').value = '0';
+  document.getElementById('ro_addToV').checked = false;
 
   const priceEl = document.getElementById('ro_price');
   const hintEl  = document.getElementById('ro_priceHint');
@@ -2000,39 +2172,62 @@ function closeRollover() {
   document.getElementById('rolloverModal').classList.add('hidden');
 }
 
+// 재계산 대상 사이클(= fromCycle + 2)의 v_history 항목
+function roHistEntry() {
+  return roCtx ? (loadVHistory().find(h => h.cycleWeek === roCtx.fromCycle + 2) || null) : null;
+}
+
 function roInputs() {
-  return {
-    px: parseFloat(document.getElementById('ro_price').value),
-    sh: parseInt(document.getElementById('ro_shares').value),
-    pl: parseFloat(document.getElementById('ro_pool').value),
-  };
+  const px = parseFloat(document.getElementById('ro_price').value);
+  const sh = parseInt(document.getElementById('ro_shares').value);
+  const pl = parseFloat(document.getElementById('ro_pool').value);
+  let dep = 0, depV = 0;
+  if (roMode === 'rollover') {
+    dep  = parseFloat(document.getElementById('ro_deposit').value) || 0;
+    depV = document.getElementById('ro_addToV').checked ? dep : 0;
+  } else {
+    // 재계산: 기존 입금 내역을 그대로 유지 (이 화면에서 바꾸지 않음)
+    const h = roHistEntry();
+    dep  = h ? (h.deposit  || 0) : 0;
+    depV = h ? (h.depositV || 0) : 0;
+  }
+  return { px, sh, pl, dep, depV };
 }
 
 function roPreview() {
   const el = document.getElementById('ro_preview');
-  const { px, sh, pl } = roInputs();
+  const { px, sh, pl, dep, depV } = roInputs();
   if (!roCtx || !(px > 0) || !(sh >= 0) || isNaN(pl)) {
     el.innerHTML = '<span style="color:#f59e0b;">종가 · 수량 · Pool을 모두 입력하세요</span>';
     return;
   }
   const ev = px * sh;
-  const nv = roCtx.baseV1 + pl / roCtx.g + (ev - roCtx.baseV1) / (2 * Math.sqrt(roCtx.g));
+  const nv = roCtx.baseV1 + pl / roCtx.g + (ev - roCtx.baseV1) / (2 * Math.sqrt(roCtx.g)) + depV;
   el.innerHTML =
     `<div style="color:#cbd5e1;">기준 V1 <b style="color:#f1f5f9;">${fmtAmt(roCtx.baseV1)}</b>` +
     ` · 평가금 <b style="color:#f1f5f9;">${fmtAmt(ev)}</b> (${sh}주 × $${px})</div>` +
     `<div style="margin-top:7px; font-size:15px;">새 V1 <b style="color:#60a5fa;">${fmtAmt(nv)}</b></div>` +
-    `<div style="color:#cbd5e1;">Vlow ${fmtAmt(nv * 0.85)} · Vhigh ${fmtAmt(nv * 1.15)}</div>`;
+    `<div style="color:#cbd5e1;">Vlow ${fmtAmt(nv * 0.85)} · Vhigh ${fmtAmt(nv * 1.15)}</div>` +
+    (dep
+      ? `<div style="margin-top:7px; color:#cbd5e1;">적립금 <b style="color:#f1f5f9;">${fmtAmt(dep)}</b>` +
+        ` · ${depV ? 'V에도 가산 (V1 +' + fmtAmt(depV) + ')' : 'Pool만 (V1 변동 없음)'}</div>` +
+        `<div style="color:#cbd5e1;">새 사이클 시작 Pool <b style="color:#f1f5f9;">${fmtAmt(pl + dep)}</b>` +
+        ` · 매수 한도(75%) <b style="color:#fbbf24;">${fmtAmt((pl + dep) * 0.75)}</b></div>`
+      : '');
 }
 
 function roConfirm() {
-  const { px, sh, pl } = roInputs();
+  const { px, sh, pl, dep, depV } = roInputs();
   if (!roCtx || !(px > 0) || !(sh >= 0) || isNaN(pl)) {
     alert('종가 · 수량 · Pool을 모두 입력하세요.');
     return;
   }
   const { fromCycle, baseV1, g } = roCtx;
-  const newV1    = baseV1 + pl / g + (px * sh - baseV1) / (2 * Math.sqrt(g));
+  // Pool은 입금 전(pl)으로 공식에 넣고, V 가산분(depV)만 마지막에 더한다
+  const newV1    = baseV1 + pl / g + (px * sh - baseV1) / (2 * Math.sqrt(g)) + depV;
   const newCycle = fromCycle + 2;
+  const startPoolNew = pl + dep;
+  const oldH = roMode === 'recalc' ? roHistEntry() : null;
 
   // 새 사이클 시작일: 초기 startWeek 기준 + (newCycle/2) × 14일
   const sw = load(KEYS.startWeek) || '';
@@ -2041,7 +2236,7 @@ function roConfirm() {
   const nextMon  = new Date(startMon);
   nextMon.setUTCDate(startMon.getUTCDate() + (newCycle / 2) * 14);
 
-  addOrUpdateVHistory({
+  const entry = {
     cycleWeek:   newCycle,
     startDate:   nextMon.toISOString().slice(0, 10),
     v1:          newV1,          // V 원값 — 반올림 밴드에서 역산하지 않도록
@@ -2050,9 +2245,21 @@ function roConfirm() {
     vhigh:       Math.round(newV1 * 1.15),
     shares:      sh,
     startShares: sh,
-    startPool:   pl,
+    startPool:   startPoolNew,
     startPrice:  px,
-  });
+  };
+  if (roMode === 'recalc' && oldH) {
+    // 입금 기록은 재계산으로 사라지면 안 된다 — 그대로 이어붙임
+    ['deposit', 'depositV', 'deposits', 'depositDate', 'depositMode'].forEach(k => {
+      if (oldH[k] !== undefined) entry[k] = oldH[k];
+    });
+  } else if (roMode === 'rollover' && dep !== 0) {
+    const kst = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+    entry.deposit  = dep;
+    entry.depositV = depV;
+    entry.deposits = [{ date: kst, amount: dep, addToV: depV !== 0 }];
+  }
+  addOrUpdateVHistory(entry);
 
   if (roMode === 'rollover') {
     save(KEYS.prevV1,           baseV1);   // 직전 사이클 V1 보관 — 입력값 잘못 넣었을 때 재계산용
@@ -2060,10 +2267,14 @@ function roConfirm() {
     localStorage.removeItem(KEYS.v2ForCycle);  // 레거시 정리
     localStorage.removeItem(KEYS.v2);
     localStorage.removeItem(KEYS.rolloverSnap);
+    if (dep !== 0) {   // 롤오버 시 적립금: 실제 Pool·시드에 반영 (재계산에서는 건드리지 않음)
+      save(KEYS.pool, loadNum(KEYS.pool) + dep);
+      save(KEYS.seed, loadNum(KEYS.seed) + dep);
+    }
   }
 
   save(KEYS.v1,             newV1);
-  save(KEYS.cycleStartPool, pl);
+  save(KEYS.cycleStartPool, startPoolNew);
 
   // cycleSnapshot: 새 사이클 시작 시점 = 새 V1과 동일한 값 (중복 계산 없음)
   save(KEYS.cycleSnapshot, JSON.stringify({
@@ -2072,7 +2283,7 @@ function roConfirm() {
     vlow:       newV1 * 0.85,
     vhigh:      newV1 * 1.15,
     shares:     sh,
-    pool:       pl,
+    pool:       startPoolNew,
     startPrice: px,
   }));
   snapshotMode = false;
@@ -2170,21 +2381,17 @@ function calculateAndRender() {
 
   // ── Pool bar (cycle buy usage) ──
   const trades = loadTrades();
-  const cycleInfo = getCycleInfo(startWeek);
-  const curCycle  = cycleInfo ? cycleInfo.cycleWeek : 0;
-  const basePool  = loadNum(KEYS.cycleStartPool) || pool;
-  const buyUsed   = trades.filter(t => (t.cycleWeek) === curCycle && t.type === '매수')
-                          .reduce((s, t) => s + t.amount + (t.fee || 0), 0);
-  const poolLim   = basePool * 0.75;
-  const usedPct   = poolLim > 0 ? Math.min(100, buyUsed / poolLim * 100) : 0;
+  const cycleInfo = getCycleInfo(startWeek);   // 사이클 카드용 (Pool 바는 activeCycleWeek 기준)
+  const bb        = cycleBuyBudget();
+  const usedPct   = bb.pct;
 
   document.getElementById('poolRemain').textContent  = fmt(pool);
-  document.getElementById('poolLimit').textContent   = fmt(poolLim);
-  document.getElementById('poolUsedLabel').textContent = `이번 사이클 매수: ${fmt(buyUsed)}`;
-  document.getElementById('poolPctLabel').textContent  = `${usedPct.toFixed(0)}% / 75%`;
+  document.getElementById('poolLimit').textContent   = fmt(bb.limit);
+  document.getElementById('poolUsedLabel').textContent = `이번 사이클 매수: ${fmt(bb.used)} · 잔여 한도 ${fmt(bb.remaining)}`;
+  document.getElementById('poolPctLabel').textContent  = `${usedPct.toFixed(0)}% 사용`;
 
   const fill = document.getElementById('poolFill');
-  fill.style.width = usedPct + '%';
+  fill.style.width = Math.min(100, usedPct) + '%';
   fill.className   = 'pool-fill' + (usedPct >= 100 ? ' danger' : usedPct >= 70 ? ' warn' : '');
 
   // ── Cycle card ──
@@ -2281,10 +2488,10 @@ function calculateAndRender() {
       rateEl2.className   = 'metric-value ' + (rate2 >= 0 ? 'c-green' : 'c-red');
     }
 
-    renderBuyTable(sp.startPrice, sp.shares, sp.vlow, sp.pool, effectiveBuyUnit);
+    renderBuyTable(sp.startPrice, sp.shares, sp.vlow, sp.pool * 0.75, effectiveBuyUnit, { limit: sp.pool * 0.75, used: 0 });
     renderSellTable(sp.startPrice, sp.shares, sp.vhigh, effectiveSellUnit);
   } else {
-    renderBuyTable(currentPrice, shares, vlow, pool, effectiveBuyUnit);
+    renderBuyTable(currentPrice, shares, vlow, bb.remaining, effectiveBuyUnit, { limit: bb.limit, used: bb.used });
     renderSellTable(currentPrice, shares, vhigh, effectiveSellUnit);
   }
 
@@ -2339,6 +2546,7 @@ function closeSettings() {
 function modalOverlayClick(e) {
   if (e.target === document.getElementById('settingsModal')) closeSettings();
   if (e.target === document.getElementById('rolloverModal')) closeRollover();
+  if (e.target === document.getElementById('depositModal')) closeDeposit();
 }
 
 function saveSettings() {
@@ -2585,9 +2793,8 @@ async function confirmVrPending(id) {
 
   const shares    = loadNum(KEYS.shares);
   const pool      = loadNum(KEYS.pool);
-  const startWeek = load(KEYS.startWeek) || '';
-  const cycleInfo = getCycleInfo(startWeek);
-  const cycleWeek = cycleInfo ? cycleInfo.cycleWeek : 0;
+  const cycleWeek = cycleWeekOfDate(t.date) ?? activeCycleWeek();
+  if (!confirmBuyLimit(t, cycleWeek, t.fee || 0)) return;   // 취소 시 대기 항목 유지
   const v2        = getEffectiveV2();
   const vlow      = v2 * 0.85;
   const vhigh     = v2 * 1.15;
