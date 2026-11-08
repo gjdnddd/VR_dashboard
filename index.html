@@ -711,6 +711,7 @@
                        padding:9px 12px; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;">- 출금</button>
       </div>
       <div class="modal-hint">입금/출금 시 금액 입력 후 버튼 클릭 — 시드가 즉시 반영됩니다</div>
+      <div class="modal-hint">실제 입출금은 Pool 카드의 💰 입금/출금 버튼을 쓰세요 (수익률 차트 원금 기록에 필요). 여기서는 잘못 입력한 값 교정용.</div>
     </div>
 
     <button class="btn" onclick="saveSettings()">저장</button>
@@ -1587,7 +1588,8 @@ function confirmTrade() {
 
   const shares    = loadNum(KEYS.shares);
   const pool      = loadNum(KEYS.pool);
-  const cycleWeek = cycleWeekOfDate(t.date) ?? activeCycleWeek();
+  const tradeYear = t.year || inferTradeYear(t.date);
+  const cycleWeek = cycleWeekOfDate(t.date, tradeYear) ?? activeCycleWeek();
   if (!confirmBuyLimit(t, cycleWeek, t.fee || 0)) return;
 
   const evalSnap  = t.price * (t.type === '매수' ? shares + t.qty : shares - t.qty);
@@ -1601,7 +1603,7 @@ function confirmTrade() {
 
   const record = {
     id: Date.now(), timestamp: Date.now(),
-    date: t.date, type: t.type,
+    date: t.date, year: tradeYear, type: t.type,
     price: t.price, qty: t.qty, amount: t.amount, fee,
     sharesAfter: newShares, poolAfter: newPool,
     cycleWeek,
@@ -1640,7 +1642,7 @@ function deleteTrade(id) {
   if (!t) return;
 
   const isBuy = t.type === '매수';
-  const msg   = `[${t.date}] ${t.type} ${t.qty}주 (${fmtAmt(t.amount)})\n\n이 내역을 삭제하면:\n`
+  const msg   = `[${fmtTradeDate(t)}] ${t.type} ${t.qty}주 (${fmtAmt(t.amount)})\n\n이 내역을 삭제하면:\n`
     + (isBuy
         ? `보유주식 ${t.qty}주 감소, Pool +${fmtAmt(t.amount)}`
         : `보유주식 ${t.qty}주 증가, Pool -${fmtAmt(t.amount)}`)
@@ -1717,7 +1719,7 @@ function renderHistory() {
           <div class="row" style="margin-bottom:5px;">
             <div style="display:flex; align-items:center; gap:8px;">
               <span style="font-weight:700; color:${col}; font-size:15px;">${t.type}</span>
-              <span class="c-muted" style="font-size:12px;">${t.date} · ${t.cycleWeek}주차</span>
+              <span class="c-muted" style="font-size:12px;">${fmtTradeDate(t)} · ${t.cycleWeek}주차</span>
             </div>
             <button onclick="deleteTrade(${t.id})"
               style="background:none; border:1px solid #334155; color:#e2e8f0; border-radius:6px;
@@ -1866,25 +1868,34 @@ function drawRateChart(trades) {
   ctx.scale(dpr, dpr);
 
   const W = rect.width, H = rect.height;
-  const P = { top: 12, right: 12, bottom: 28, left: 48 };
+  // 입출금이 있으면 위쪽에 마커 레이블 전용 여백을 둔다 (포인트 레이블과 겹치지 않도록)
+  const P = { top: loadVHistory().some(h => h.deposit) ? 26 : 12, right: 12, bottom: 28, left: 48 };
   const pw = W - P.left - P.right;
   const ph = H - P.top  - P.bottom;
 
   // 사이클 첫날만 표시 (startPrice, startShares, startPool이 모두 있는 항목만)
-  const pts = loadVHistory()
+  // 해당 시점의 원금 = 현재 시드 − 그 이후(cycleWeek 초과) 사이클들의 입출금 합
+  const allH = loadVHistory();
+  const seedAt = cw => seed - allH.reduce((s, h) => s + (h.cycleWeek > cw ? (h.deposit || 0) : 0), 0);
+  const pts = allH
     .filter(h => h.startPrice != null && h.startShares != null && h.startPool != null)
-    .map((h, i) => ({
+    .map(h => ({ h, sa: seedAt(h.cycleWeek) }))
+    .filter(o => o.sa > 0)
+    .map((o, i) => ({
       i,
-      date: h.startDate,
-      rate: (h.startPrice * h.startShares + h.startPool - seed) / seed * 100,
-      cycleWeek: h.cycleWeek,
+      date: o.h.startDate,
+      rate: (o.h.startPrice * o.h.startShares + o.h.startPool - o.sa) / o.sa * 100,
+      cycleWeek: o.h.cycleWeek,
+      deposit: o.h.deposit || 0,
     }));
 
   if (pts.length === 0) return;
 
   const rates = pts.map(p => p.rate);
-  const minY  = Math.min(...rates, 0) - 2;
-  const maxY  = Math.max(...rates, 0) + 2;
+  const rawLo = Math.min(...rates, 0), rawHi = Math.max(...rates, 0);
+  const minY  = rawLo - 2;
+  // 최고점 레이블(포인트 위 ~17px)이 위쪽 입출금 레이블 여백으로 올라가지 않도록 위쪽 여유를 둔다
+  const maxY  = rawHi + Math.max(2, (rawHi - rawLo) * 0.2);
   const rng   = maxY - minY || 1;
 
   const tx = i => P.left + (pts.length <= 1 ? pw / 2 : i / (pts.length - 1) * pw);
@@ -1901,6 +1912,28 @@ function drawRateChart(trades) {
     ctx.moveTo(P.left, ty(v)); ctx.lineTo(P.left + pw, ty(v));
     ctx.stroke();
   }
+  ctx.setLineDash([]);
+
+  // 입출금 마커 (포인트보다 먼저 그려 포인트가 위에 오도록)
+  pts.forEach((p, i) => {
+    if (!p.deposit) return;
+    const x = tx(i);
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x, P.top - 3); ctx.lineTo(x, P.top + ph);
+    ctx.stroke();
+    ctx.restore();
+    const amt = Math.round(Math.abs(p.deposit)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const dl = (p.deposit > 0 ? '+$' + amt + ' 입금' : '−$' + amt + ' 출금');
+    ctx.font = 'bold 9px sans-serif';
+    ctx.fillStyle = '#f59e0b';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const half = ctx.measureText(dl).width / 2 + 2;
+    ctx.fillText(dl, Math.min(Math.max(x, P.left + half), P.left + pw - half), P.top - 15);
+  });
   ctx.setLineDash([]);
 
   // 사이클 첫날 수익률 포인트 + 레이블
@@ -1973,16 +2006,32 @@ function activeCycleWeek() {
 
 // 거래일("MM/DD")이 속한 사이클 주차 — 입력 시점이 아니라 거래일 기준으로 귀속한다.
 // 연도는 올해, 단 오늘보다 7일 넘게 미래면 작년으로 본다. 해석 불가면 null.
-function cycleWeekOfDate(mmdd) {
+function inferTradeYear(mmdd) {
   const m = /^\s*(\d{1,2})[\/.\-](\d{1,2})\s*$/.exec(String(mmdd || ''));
-  const sw = load(KEYS.startWeek) || '';
-  if (!m || !/^\d{4}-\d{2}-\d{2}$/.test(sw)) return null;
+  if (!m) return null;
   const mo = parseInt(m[1]), d = parseInt(m[2]);
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
   const kst = new Date(Date.now() + 9 * 3600000);
   const todayMs = Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), kst.getUTCDate());
   let y = kst.getUTCFullYear();
   if (Date.UTC(y, mo - 1, d) - todayMs > 7 * 86400000) y -= 1;
+  return y;
+}
+
+// 거래 표시용 날짜 — year가 있으면 YY/MM/DD, 없으면 기존 MM/DD 그대로
+function fmtTradeDate(t) {
+  if (t && t.year) return String(t.year).slice(-2) + '/' + t.date;
+  return t ? t.date : '';
+}
+
+function cycleWeekOfDate(mmdd, year) {
+  const m = /^\s*(\d{1,2})[\/.\-](\d{1,2})\s*$/.exec(String(mmdd || ''));
+  const sw = load(KEYS.startWeek) || '';
+  if (!m || !/^\d{4}-\d{2}-\d{2}$/.test(sw)) return null;
+  const mo = parseInt(m[1]), d = parseInt(m[2]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const y = year || inferTradeYear(mmdd);
+  if (y == null) return null;
   const [sy, sm, sd] = sw.split('-').map(Number);
   const diffDays = Math.floor((Date.UTC(y, mo - 1, d) - Date.UTC(sy, sm - 1, sd)) / 86400000);
   if (diffDays < 0) return 0;
@@ -2793,7 +2842,8 @@ async function confirmVrPending(id) {
 
   const shares    = loadNum(KEYS.shares);
   const pool      = loadNum(KEYS.pool);
-  const cycleWeek = cycleWeekOfDate(t.date) ?? activeCycleWeek();
+  const tradeYear = t.year || inferTradeYear(t.date);
+  const cycleWeek = cycleWeekOfDate(t.date, tradeYear) ?? activeCycleWeek();
   if (!confirmBuyLimit(t, cycleWeek, t.fee || 0)) return;   // 취소 시 대기 항목 유지
   const v2        = getEffectiveV2();
   const vlow      = v2 * 0.85;
@@ -2805,7 +2855,7 @@ async function confirmVrPending(id) {
 
   const record = {
     id: Date.now(), timestamp: Date.now(),
-    date: t.date, type: t.type,
+    date: t.date, year: tradeYear, type: t.type,
     price: t.price, qty: t.qty, amount: t.amount, fee,
     sharesAfter: newShares, poolAfter: newPool,
     cycleWeek,
