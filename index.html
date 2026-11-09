@@ -2157,8 +2157,11 @@ function depositConfirm(sign) {
 // 일봉을 받아 마감시각 이전 마지막 봉을 고르므로, 금요일이 공휴일이면 목요일이 자동으로 잡힌다.
 async function fetchCycleClose(endMs) {
   const YF = 'https://query1.finance.yahoo.com/v8/finance/chart/TQQQ?interval=1d&range=1mo';
+  const ctl   = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 6000);   // 프록시가 응답하지 않아도 모달이 "조회 중…"에 멈추지 않도록
   try {
-    const res = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(YF)}`);
+    const res = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(YF)}`, { signal: ctl.signal });
+    if (!res.ok) return null;                           // 배포 사이트에서 401 확인(2026-11-09) — 실패로 처리
     const j   = await res.json();
     const r   = j.chart?.result?.[0];
     const ts  = r?.timestamp || [];
@@ -2171,6 +2174,7 @@ async function fetchCycleClose(endMs) {
     }
     return hit;
   } catch (e) { console.error('close fetch fail', e); return null; }
+  finally { clearTimeout(timer); }
 }
 
 // 롤오버 대기 사이클 — 저장된 스냅샷 없이 매번 계산한다 (기기 간 동기화 시 어긋나지 않도록).
@@ -2238,11 +2242,18 @@ async function openRolloverModal(title) {
 
   const hit = await fetchCycleClose(roCtx.endMs);
   if (hit) {
-    priceEl.value = hit.price.toFixed(2);
-    hintEl.textContent = `${fmtDate(new Date(hit.ms))} 종가 자동조회 — 다르면 직접 수정하세요`;
+    if (priceEl.value === '') {
+      priceEl.value = hit.price.toFixed(2);
+      hintEl.textContent = `${fmtDate(new Date(hit.ms))} 종가 자동조회 — 다르면 직접 수정하세요`;
+    } else {
+      // 조회 중에 사용자가 직접 입력했다면 그 값을 덮어쓰지 않는다
+      hintEl.textContent = `직접 입력값 유지 (자동조회: ${fmtDate(new Date(hit.ms))} $${hit.price.toFixed(2)})`;
+    }
   } else {
-    priceEl.value = currentPrice ?? '';
-    hintEl.textContent = '자동조회 실패 — 사이클 마지막 거래일 종가를 직접 입력하세요';
+    // 실패하면 비워 둔다 — 현재가를 채우면 사이클 종료 시점 종가가 아닌 값(월요일 밤 이후엔 달라짐)으로
+    // V1이 계산될 수 있어서, 종가를 직접 입력해야 확정되도록 한다
+    const ref = currentPrice ? ` (참고: 현재가 $${currentPrice.toFixed(2)}는 종료일 종가와 다를 수 있음)` : '';
+    hintEl.textContent = '자동조회 실패 — 사이클 마지막 거래일 종가를 직접 입력하세요' + ref;
   }
   roPreview();
 }
