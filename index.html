@@ -402,6 +402,7 @@
       <div>
         <h1>VR 대시보드</h1>
         <div class="subtitle" id="cycleInfo">계산 중…</div>
+        <div id="syncChip" class="hidden" onclick="syncChipClick()" style="display:inline-block; margin-top:4px; font-size:11px; padding:2px 8px; border-radius:6px; border:1px solid #334155; color:#94a3b8; background:#0f172a; cursor:pointer;"></div>
       </div>
       <button class="icon-btn" onclick="refreshPrice()">↻ 새로고침</button>
     </div>
@@ -839,14 +840,23 @@ const KEYS = {
   v2ForCycle:       'vr_v2_for_cycle',    // 레거시
   prevV1:           'vr_prev_v1',         // 직전 사이클 V1 (롤오버 입력값 교정용)
   vHistory:         'vr_v_history',
-  rolloverSnap:     'vr_rollover_snap',
   cycleSnapshot:    'vr_cycle_snapshot',
 };
+
+// 레거시 — 롤오버 대기 스냅샷. 이제 대기 여부는 lastRolloverWeek·사이클 마감 시각으로 계산한다.
+// 남아 있으면 기기 간 불일치(이미 롤오버된 사이클 배너가 계속 뜸)를 만들므로 부팅·pull 때 지운다.
+const LEGACY_ROLLOVER_SNAP = 'vr_rollover_snap';
 
 // 클라우드 동기화 대상 키 (PAT·GistID는 제외 — 기기마다 따로 관리)
 const SYNC_KEYS = ['vr_v1','vr_shares','vr_pool','vr_g','vr_start_week',
                    'vr_unit_qty','vr_seed','vr_trades','vr_cycle_start_pool','vr_last_rollover_week',
-                   'vr_prev_v1','vr_v_history','vr_rollover_snap','vr_cycle_snapshot'];
+                   'vr_prev_v1','vr_v_history','vr_cycle_snapshot'];
+
+// 동기화 상태 — 이 기기 전용 키 (SYNC_KEYS에 넣지 않음)
+//  _vr_last_synced_ts : 이 기기가 마지막으로 보거나 쓴 클라우드 _lastModified
+//  _vr_dirty          : '1' = 로컬 변경이 아직 클라우드에 반영되지 않음
+const SYNC_TS_KEY = '_vr_last_synced_ts';
+const DIRTY_KEY   = '_vr_dirty';
 
 const save    = (k, v) => localStorage.setItem(k, String(v));
 const load    = (k)    => localStorage.getItem(k);
@@ -2163,20 +2173,40 @@ async function fetchCycleClose(endMs) {
   } catch (e) { console.error('close fetch fail', e); return null; }
 }
 
+// 롤오버 대기 사이클 — 저장된 스냅샷 없이 매번 계산한다 (기기 간 동기화 시 어긋나지 않도록).
+//  · 롤오버 이력 있음: 다음 대상 = lastRolloverWeek + 2, 그 사이클 마감이 지났으면 대기
+//    (월요일 이후 늦게 롤오버해도 놓친 사이클을 그대로 보여준다)
+//  · 롤오버 이력 없음: 기존 규칙 — 현재 사이클 마감 && 초기 입력 이전 사이클이 아님
+//  · 마감 시각이 초기 입력(setupAt) 이전인 사이클은 대기로 보지 않는다
+// 반환: 대기 중인 fromCycle, 없으면 null
+function rolloverPendingFrom() {
+  const ci = getCycleInfo(load(KEYS.startWeek) || '');
+  if (!ci) return null;
+  const lr      = parseInt(load(KEYS.lastRolloverWeek) ?? '-1');
+  const setupAt = parseInt(load(KEYS.setupAt) || '0');
+  if (lr >= 0) {
+    const from = lr + 2;
+    const end  = cycleEndMs(from);
+    return (Date.now() >= end && end > setupAt) ? from : null;
+  }
+  const preSetup = ci.endMs !== undefined && ci.endMs <= setupAt;
+  return (ci.isEnded && !preSetup) ? ci.cycleWeek : null;
+}
+
 function rolloverCycle() {
-  const snap = loadJSON(KEYS.rolloverSnap, null);
-  if (!snap) {
+  const fromCycle = rolloverPendingFrom();
+  if (fromCycle === null) {
     alert('롤오버 대기 중인 사이클이 없습니다.\n사이클 종료(토요일 06:10 KST) 후 앱을 열면 자동으로 준비됩니다.');
     return;
   }
   roMode = 'rollover';
   roCtx  = {
-    fromCycle: snap.fromCycle,
+    fromCycle,
     baseV1:    loadNum(KEYS.v1),          // 이번 사이클 V1 (사이클 내내 불변)
     g:         loadNum(KEYS.g) || 10,
-    endMs:     cycleEndMs(snap.fromCycle),
+    endMs:     cycleEndMs(fromCycle),
   };
-  openRolloverModal(`${snap.fromCycle}주차 → ${snap.fromCycle + 2}주차 롤오버`);
+  openRolloverModal(`${fromCycle}주차 → ${fromCycle + 2}주차 롤오버`);
 }
 
 async function openRolloverModal(title) {
@@ -2315,7 +2345,7 @@ function roConfirm() {
     save(KEYS.lastRolloverWeek, fromCycle);
     localStorage.removeItem(KEYS.v2ForCycle);  // 레거시 정리
     localStorage.removeItem(KEYS.v2);
-    localStorage.removeItem(KEYS.rolloverSnap);
+    localStorage.removeItem(LEGACY_ROLLOVER_SNAP);
     if (dep !== 0) {   // 롤오버 시 적립금: 실제 Pool·시드에 반영 (재계산에서는 건드리지 않음)
       save(KEYS.pool, loadNum(KEYS.pool) + dep);
       save(KEYS.seed, loadNum(KEYS.seed) + dep);
@@ -2372,19 +2402,7 @@ function calculateAndRender() {
   const eval_ = currentPrice !== null ? currentPrice * shares : null;
 
   // V2(밴드 중심) = 사이클 V1 그 자체 — 롤오버 때만 바뀜
-  const _ci          = getCycleInfo(startWeek);
-  const _curWeek     = _ci ? _ci.cycleWeek : 0;
-
-  // 사이클 종료 감지 → 롤오버 스냅샷 저장 (V2/Pool/Shares 종료 시점 고정)
-  const _lastRoll  = parseInt(load(KEYS.lastRolloverWeek) ?? '-1');
-  const _setupAt   = parseInt(load(KEYS.setupAt) || '0');
-  const _preSetup  = _ci && _ci.endMs !== undefined && _ci.endMs <= _setupAt;
-  const _snap = loadJSON(KEYS.rolloverSnap, null);
-  if (_ci && _ci.isEnded && !_preSetup && _lastRoll !== _curWeek && (!_snap || _snap.fromCycle !== _curWeek)) {
-    const _snapV2 = getEffectiveV2();
-    save(KEYS.rolloverSnap, JSON.stringify({ fromCycle: _curWeek, v2: _snapV2, pool, shares }));
-  }
-
+  // (롤오버 대기 여부는 rolloverPendingFrom()이 계산 — 스냅샷을 저장하지 않는다)
   const v2 = v1 > 0 ? v1 : null;
   const vlow  = v2 !== null ? v2 * 0.85 : null;
   const vhigh = v2 !== null ? v2 * 1.15 : null;
@@ -2463,14 +2481,14 @@ function calculateAndRender() {
     const banner    = document.getElementById('cycleEndedBanner');
     const doneBox   = document.getElementById('rolloverDoneBox');
     const lastRollover = parseInt(load(KEYS.lastRolloverWeek) ?? '-1');
-    const bSnap     = loadJSON(KEYS.rolloverSnap, null);
+    const pendFrom  = rolloverPendingFrom();
 
-    if (bSnap) {
-      // 스냅샷 존재 → 롤오버 대기 배너 (언제든 클릭 가능)
+    if (pendFrom !== null) {
+      // 롤오버 대기 → 배너 (언제든 클릭 가능)
       // 실제 V1은 확인 모달에서 "종료일 종가·수량·Pool"로 계산하므로 여기서 미리보기를 띄우지 않는다
       // (실시간 가격으로 계산한 값을 보여주면 확정값과 달라져 혼란만 준다)
       document.getElementById('rolloverSubText').textContent =
-        `${bSnap.fromCycle}주차 종료 · 종료일 종가·수량·Pool 기준으로 계산합니다`;
+        `${pendFrom}주차 종료 · 종료일 종가·수량·Pool 기준으로 계산합니다`;
       banner.classList.remove('hidden');
       doneBox.classList.add('hidden');
     } else if (c.isEnded && lastRollover === c.cycleWeek) {
@@ -2629,43 +2647,211 @@ function saveSettings() {
 /* ============================================================
    GitHub Gist 동기화
    ============================================================ */
-// 자동 pull — 앱 시작 시 1회, 클라우드 → 로컬 덮어씀 (충돌 방지)
-async function autoGistPull() {
-  const pat    = load(KEYS.githubPat);
-  const gistId = load(KEYS.gistId);
-  if (!pat || !gistId) return;
+/* ── 동기화 상태 (Phase 13) ──────────────────────────────────
+   규칙: 한 기기에서 수정 → 클라우드 → 다른 기기에 반영.
+   · push 전에 클라우드 _lastModified를 확인해, 이 기기가 마지막으로 본 값보다 새로우면
+     덮어쓰지 않는다 (다른 기기의 롤오버·입금을 옛 데이터로 지우지 않도록).
+   · push가 실패하면 dirty를 유지 — dirty인 동안 pull은 로컬을 덮어쓰지 않는다.
+   ────────────────────────────────────────────────────────── */
+let syncConflict = false;   // 클라우드가 더 새로워서 업로드를 멈춘 상태
+let syncIncoming = false;   // 새 클라우드 데이터가 있으나 모달·입력 중이라 반영 보류
+let syncOkAt     = null;    // 마지막으로 클라우드와 일치를 확인한 시각
+let _editSeq     = 0;       // autoGistPush 호출 순번 — 업로드 중 새 수정이 생기면 dirty 유지
+let _pushChain   = Promise.resolve();
+let _pushInFlight = 0;
+let _pullBusy    = false;
+let _lastPullAt  = 0;
 
-  try {
-    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
-      headers: gistHeaders(pat),
-    });
-    if (!res.ok) return;
-    const json    = await res.json();
-    const content = json.files?.['vr_data.json']?.content;
-    if (!content) return;
-    const data = JSON.parse(content);
-
-    // 로컬이 더 최신이면 덮어쓰지 않음 (push 실패 시 데이터 롤백 방지)
-    const cloudTs = Number(data['_lastModified'] || 0);
-    const localTs = Number(localStorage.getItem('_vr_last_push_ts') || 0);
-    if (localTs > cloudTs) return;
-
-    SYNC_KEYS.forEach(k => { if (data[k] !== undefined) localStorage.setItem(k, data[k]); });
-    showSyncBadge('↓ 클라우드 동기화 완료');
-  } catch (_) { /* 네트워크 오류 무시 — 로컬 데이터로 계속 */ }
+// 이 기기가 마지막으로 보거나 쓴 클라우드 _lastModified (구버전 호환: _vr_last_push_ts)
+function lastSyncedTs() {
+  const v = localStorage.getItem(SYNC_TS_KEY);
+  if (v !== null) return Number(v) || 0;
+  return Number(localStorage.getItem('_vr_last_push_ts') || 0);
 }
+function setSyncedTs(ts) {
+  localStorage.setItem(SYNC_TS_KEY, String(ts));
+  localStorage.setItem('_vr_last_push_ts', String(ts));
+}
+function isDirty()   { return localStorage.getItem(DIRTY_KEY) === '1'; }
+function setDirty(on) {
+  if (on) localStorage.setItem(DIRTY_KEY, '1'); else localStorage.removeItem(DIRTY_KEY);
+}
+function cleanLegacySnap() { localStorage.removeItem(LEGACY_ROLLOVER_SNAP); }
 
-// 자동 push — PAT·GistID 없으면 조용히 건너뜀, 실패해도 사용자에게 알리지 않음
-async function autoGistPush() {
-  const pat    = load(KEYS.githubPat);
-  const gistId = load(KEYS.gistId);
-  if (!pat || !gistId) return;
-
+function collectSyncData() {
   const data = {};
   SYNC_KEYS.forEach(k => { const v = localStorage.getItem(k); if (v !== null) data[k] = v; });
-  data['_lastModified'] = String(Date.now());
+  return data;
+}
 
+// 클라우드 vr_data.json 조회 — 캐시 없이 (낡은 응답으로 잠금 판정이 틀리지 않도록)
+async function fetchCloudData(pat, gistId) {
+  const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+    headers: gistHeaders(pat), cache: 'no-store',
+  });
+  if (!res.ok) return { ok: false, status: res.status };
+  const json    = await res.json();
+  const content = json.files?.['vr_data.json']?.content;
+  let data = null;
+  if (content) { try { data = JSON.parse(content); } catch (_) { data = null; } }
+  return { ok: true, data, ts: data ? Number(data['_lastModified'] || 0) : 0 };
+}
+
+// 모달이 열려 있거나 입력 중이면 화면을 갈아엎지 않는다
+function isUiBusy() {
+  if (document.querySelector('.modal-overlay:not(.hidden)')) return true;
+  const a = document.activeElement;
+  return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+}
+
+function markSyncOk() {
+  syncOkAt = new Date();
+  hideSyncWarn();
+  renderSyncChip();
+}
+function markSyncFailed() {
+  renderSyncChip();
+  showSyncBadge('⚠ 동기화 실패 — 변경사항이 이 기기에만 있음 (눌러서 재시도)', { warn: true, persist: true });
+}
+function markSyncConflict() {
+  syncConflict = true;
+  renderSyncChip();
+  showSyncBadge('⚠ 다른 기기에서 수정됨 — 눌러서 클라우드 데이터 불러오기', { warn: true, persist: true });
+}
+
+// 헤더의 동기화 상태 표시
+function renderSyncChip() {
+  const el = document.getElementById('syncChip');
+  if (!el) return;
+  if (!load(KEYS.githubPat) || !load(KEYS.gistId)) { el.classList.add('hidden'); return; }
+  let txt, color, border;
+  if (syncConflict)      { txt = '⚠ 다른 기기에서 수정됨'; color = '#fca5a5'; border = '#7f1d1d'; }
+  else if (isDirty())    { txt = '⚠ 동기화 대기·실패';     color = '#fcd34d'; border = '#78350f'; }
+  else if (syncIncoming) { txt = '☁ 클라우드에 새 데이터 있음'; color = '#93c5fd'; border = '#1d4ed8'; }
+  else if (syncOkAt)     {
+    txt = '☁ 동기화됨 ' + syncOkAt.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+    color = '#94a3b8'; border = '#334155';
+  } else                 { txt = '☁ 동기화 확인 중…'; color = '#94a3b8'; border = '#334155'; }
+  el.textContent = txt;
+  el.style.color = color;
+  el.style.borderColor = border;
+  el.classList.remove('hidden');
+}
+
+// pull 반영 후 현재 화면 다시 그리기
+function refreshAfterPull() {
+  if (!hasSetup()) return;
+  if (document.getElementById('dashboardScreen').classList.contains('hidden')) { showDashboard(); return; }
+  calculateAndRender();   // 기록 탭이 열려 있으면 내부에서 renderHistory()까지 호출
+  if (activeTab === 'verify') updateVerifyUnitDisplay();
+}
+
+// 자동 pull — 클라우드 → 로컬. 반영했으면 true
+//  opts.defer : 모달·입력 중이면 반영을 미루고 '새 데이터 있음'만 표시
+//  opts.force : dirty여도 클라우드로 덮어씀 (사용자가 충돌 해소를 확인했을 때만)
+async function autoGistPull(opts = {}) {
+  const pat    = load(KEYS.githubPat);
+  const gistId = load(KEYS.gistId);
+  if (!pat || !gistId) return false;
+  if (_pullBusy || _pushInFlight) return false;   // 업로드 중에는 판정이 흔들리므로 건너뜀
+
+  _pullBusy = true;
+  _lastPullAt = Date.now();
   try {
+    const cloud = await fetchCloudData(pat, gistId);
+    if (!cloud.ok) { if (isDirty()) markSyncFailed(); return false; }
+    if (!cloud.data) { cleanLegacySnap(); return false; }
+
+    const newer = cloud.ts > lastSyncedTs();
+    // 로컬이 비어 있으면(초기화 직후 등) 지킬 변경이 없으므로 dirty를 무시하고 받아온다
+    if (isDirty() && hasSetup() && !opts.force) {
+      // 로컬 변경이 아직 클라우드에 없음 → 덮어쓰지 않는다
+      if (newer) markSyncConflict();
+      else autoGistPush();            // 이전에 실패한 업로드 재시도
+      return false;
+    }
+    // 같은 버전이면 반영할 것 없음 (단, 로컬이 비어 있으면 — 초기화 직후 등 — 받아온다)
+    if (!newer && hasSetup() && !opts.force) {
+      syncIncoming = false; cleanLegacySnap(); markSyncOk();
+      return false;
+    }
+    if (opts.defer && isUiBusy()) {
+      syncIncoming = true;
+      renderSyncChip();
+      showSyncBadge('☁ 클라우드에 새 데이터 있음 — 창을 닫으면 반영됩니다');
+      return false;
+    }
+
+    SYNC_KEYS.forEach(k => { if (cloud.data[k] !== undefined) localStorage.setItem(k, cloud.data[k]); });
+    setSyncedTs(cloud.ts);
+    setDirty(false);
+    cleanLegacySnap();
+    syncIncoming = false;
+    syncConflict = false;
+    markSyncOk();
+    showSyncBadge('↓ 클라우드 동기화 완료');
+    return true;
+  } catch (_) {
+    if (isDirty()) markSyncFailed();   // 네트워크 오류 — 로컬 데이터로 계속
+    return false;
+  } finally {
+    _pullBusy = false;
+  }
+}
+
+// 포커스 복귀·화면 표시·주기 확인 시 pull (15초 이내 중복 호출은 건너뜀)
+async function autoPullTick(force) {
+  if (document.visibilityState === 'hidden') return;
+  if (!force && Date.now() - _lastPullAt < 15000) return;
+  const applied = await autoGistPull({ defer: true });
+  if (applied) refreshAfterPull();
+}
+
+// 헤더 상태 표시 탭 — 충돌: 클라우드로 덮어쓰기 확인 / 실패: 재시도 / 그 외: 지금 확인
+async function syncChipClick() {
+  if (syncConflict) {
+    if (!confirm('다른 기기에서 수정한 데이터가 클라우드에 있습니다.\n클라우드 데이터를 불러올까요?\n(이 기기에서 아직 업로드되지 않은 변경은 사라집니다)')) return;
+    const applied = await autoGistPull({ force: true });
+    if (applied) refreshAfterPull();
+    return;
+  }
+  if (isDirty()) { autoGistPush(); return; }
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  const applied = await autoGistPull();
+  if (applied) refreshAfterPull();
+}
+
+// 자동 push — PAT·GistID 없으면 조용히 건너뜀. 호출자는 await하지 않아도 된다(순차 실행).
+function autoGistPush() {
+  const pat    = load(KEYS.githubPat);
+  const gistId = load(KEYS.gistId);
+  if (!pat || !gistId) return Promise.resolve();
+
+  _editSeq++;
+  setDirty(true);
+  renderSyncChip();
+  _pushChain = _pushChain.then(_doGistPush).catch(() => {});
+  return _pushChain;
+}
+
+async function _doGistPush() {
+  const pat    = load(KEYS.githubPat);
+  const gistId = load(KEYS.gistId);
+  if (!pat || !gistId || !isDirty()) return;
+  if (!hasSetup()) return;   // 빈 로컬 데이터로 클라우드를 덮어쓰지 않는다
+  const seq = _editSeq;
+  _pushInFlight++;
+  try {
+    // 1) 클라우드가 이 기기가 마지막으로 본 것보다 새로우면 덮어쓰지 않는다
+    const cloud = await fetchCloudData(pat, gistId);
+    if (!cloud.ok) { markSyncFailed(); return; }
+    const base = lastSyncedTs();
+    if (cloud.ts > base) { markSyncConflict(); return; }
+
+    // 2) vr_data.json만 PATCH (vr_pending.json 등 다른 파일은 건드리지 않음)
+    const data  = collectSyncData();
+    const newTs = Math.max(Date.now(), cloud.ts + 1, base + 1);   // 기기 시계가 달라도 단조 증가
+    data['_lastModified'] = String(newTs);
     const res = await fetch(`https://api.github.com/gists/${gistId}`, {
       method: 'PATCH',
       headers: gistHeaders(pat),
@@ -2673,8 +2859,16 @@ async function autoGistPush() {
         files: { 'vr_data.json': { content: JSON.stringify(data, null, 2) } },
       }),
     });
-    if (res.ok) localStorage.setItem('_vr_last_push_ts', String(Date.now()));
-  } catch (_) { /* 네트워크 오류 무시 */ }
+    if (!res.ok) { markSyncFailed(); return; }
+    setSyncedTs(newTs);
+    if (seq === _editSeq) setDirty(false);   // 업로드 중 새 수정이 있었으면 다음 push가 처리
+    syncConflict = false;
+    markSyncOk();
+  } catch (_) {
+    markSyncFailed();
+  } finally {
+    _pushInFlight--;
+  }
 }
 
 function syncStatusMsg(msg, color) {
@@ -2695,19 +2889,31 @@ async function gistSave() {
   const { pat, gistId } = saveSyncCredentials();
   if (!pat) { syncStatusMsg('GitHub PAT를 입력하세요.', '#f59e0b'); return; }
 
-  // 동기화 대상 데이터 수집
-  const data = {};
-  SYNC_KEYS.forEach(k => { const v = localStorage.getItem(k); if (v !== null) data[k] = v; });
-  data['_lastModified'] = String(Date.now());
-
-  const body = {
-    description: 'VR Dashboard Data',
-    public: false,
-    files: { 'vr_data.json': { content: JSON.stringify(data, null, 2) } },
-  };
-
   try {
     syncStatusMsg('저장 중…', '#60a5fa');
+
+    // 클라우드가 이 기기가 마지막으로 본 것보다 새로우면 덮어쓰기 전에 확인
+    const base = lastSyncedTs();
+    let cloudTs = 0;
+    if (gistId) {
+      try { const c = await fetchCloudData(pat, gistId); if (c.ok) cloudTs = c.ts; } catch (_) {}
+      if (cloudTs > base &&
+          !confirm('다른 기기에서 더 최근에 수정한 데이터가 클라우드에 있습니다.\n이 기기의 데이터로 덮어쓰시겠습니까?')) {
+        syncStatusMsg('취소됨', '#e2e8f0'); return;
+      }
+    }
+
+    // 동기화 대상 데이터 수집
+    const data  = collectSyncData();
+    const newTs = Math.max(Date.now(), cloudTs + 1, base + 1);
+    data['_lastModified'] = String(newTs);
+
+    const body = {
+      description: 'VR Dashboard Data',
+      public: false,
+      files: { 'vr_data.json': { content: JSON.stringify(data, null, 2) } },
+    };
+
     let res, json;
     if (gistId) {
       res  = await fetch(`https://api.github.com/gists/${gistId}`, { method: 'PATCH', headers: gistHeaders(pat), body: JSON.stringify(body) });
@@ -2723,7 +2929,10 @@ async function gistSave() {
       save(KEYS.gistId, json.id);
       document.getElementById('edit_gistId').value = json.id;
     }
-    localStorage.setItem('_vr_last_push_ts', String(Date.now()));
+    setSyncedTs(newTs);
+    setDirty(false);
+    syncConflict = false;
+    markSyncOk();
     syncStatusMsg('✓ 저장 완료 · ' + new Date().toLocaleTimeString('ko-KR', { hour:'2-digit', minute:'2-digit' }), '#22c55e');
   } catch (e) {
     syncStatusMsg('네트워크 오류: ' + e.message, '#ef4444');
@@ -2740,7 +2949,7 @@ async function gistLoad() {
   try {
     syncStatusMsg('불러오는 중…', '#60a5fa');
     const res = await fetch(`https://api.github.com/gists/${gistId}`, {
-      headers: gistHeaders(pat),
+      headers: gistHeaders(pat), cache: 'no-store',
     });
     const json = await res.json();
     if (!res.ok) { syncStatusMsg(`오류: ${json.message || res.status}`, '#ef4444'); return; }
@@ -2758,6 +2967,10 @@ async function gistLoad() {
     SYNC_KEYS.forEach(k => {
       if (data[k] !== undefined) localStorage.setItem(k, data[k]);
     });
+    setSyncedTs(Number(data['_lastModified'] || 0));
+    setDirty(false);
+    cleanLegacySnap();
+    syncConflict = false;
 
     syncStatusMsg('✓ 불러오기 완료. 새로고침합니다…', '#22c55e');
     setTimeout(() => location.reload(), 1200);
@@ -2767,7 +2980,9 @@ async function gistLoad() {
 }
 
 // 헤더 아래 잠깐 표시되는 동기화 뱃지
-function showSyncBadge(msg) {
+//  opts.warn    : 경고색(주황)
+//  opts.persist : 자동으로 사라지지 않음 (탭하면 닫힘, 동기화 성공 시 자동 해제)
+function showSyncBadge(msg, opts = {}) {
   let el = document.getElementById('syncBadge');
   if (!el) {
     el = document.createElement('div');
@@ -2775,12 +2990,29 @@ function showSyncBadge(msg) {
     el.style.cssText = 'position:fixed;top:56px;left:50%;transform:translateX(-50%);' +
       'background:#1d4ed8;color:#bfdbfe;font-size:11px;padding:4px 14px;' +
       'border-radius:0 0 8px 8px;z-index:500;transition:opacity .4s;max-width:480px;width:100%;text-align:center;';
+    // 지속 경고를 누르면 닫고, 헤더 상태 칩과 같은 동작을 바로 실행한다
+    // (경고가 칩 자리를 덮어서 칩을 못 누르던 문제 — 충돌: 클라우드 불러오기 확인, 실패: 재시도)
+    el.onclick = () => {
+      const wasWarn = el._persist;
+      el.style.opacity = '0'; el.style.pointerEvents = 'none'; el._persist = false;
+      if (wasWarn) syncChipClick();
+    };
     document.body.appendChild(el);
   }
   el.textContent = msg;
+  el.style.background = opts.warn ? '#b45309' : '#1d4ed8';
+  el.style.color      = opts.warn ? '#fef3c7' : '#bfdbfe';
   el.style.opacity = '1';
+  el.style.pointerEvents = opts.persist ? 'auto' : 'none';
+  el._persist = !!opts.persist;
   clearTimeout(el._t);
-  el._t = setTimeout(() => { el.style.opacity = '0'; }, 2500);
+  if (!opts.persist) el._t = setTimeout(() => { el.style.opacity = '0'; }, 2500);
+}
+
+// 지속 경고 뱃지 해제 (동기화가 정상으로 돌아왔을 때)
+function hideSyncWarn() {
+  const el = document.getElementById('syncBadge');
+  if (el && el._persist) { el._persist = false; el.style.opacity = '0'; el.style.pointerEvents = 'none'; }
 }
 
 /* ============================================================
@@ -2901,6 +3133,8 @@ async function clearVrPendingGist() {
    Boot
    ============================================================ */
 document.addEventListener('DOMContentLoaded', async () => {
+  cleanLegacySnap();      // 레거시 롤오버 스냅샷 제거 (첫 렌더 전)
+  renderSyncChip();
   await autoGistPull();
 
   if (hasSetup()) {
@@ -2908,6 +3142,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else {
     document.getElementById('setupScreen').classList.remove('hidden');
   }
+
+  // 다른 기기 수정분 자동 반영 — 화면 복귀·포커스·bfcache 복원 시 + 60초 주기 (15초 스로틀)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') autoPullTick(false);
+  });
+  window.addEventListener('focus',    () => autoPullTick(false));
+  window.addEventListener('pageshow', () => autoPullTick(false));
+  setInterval(() => autoPullTick(false), 60000);
 
   // mmNoti 대기 체결 폴링 (60초 간격)
   pollVrPending();
